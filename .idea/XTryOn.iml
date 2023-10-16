@@ -2,7 +2,7 @@
 <module type="PYTHON_MODULE" version="4">
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$" />
-    <orderEntry type="jdk" jdkName="torch2.0" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Remote Python 3.11.4 (sftp://yuange@175.178.165.93:22/cfs/yuange/anaconda3/envs/tryon/bin/python3)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>

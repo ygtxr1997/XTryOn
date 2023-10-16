@@ -1,11 +1,46 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="local" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="XVerse_V100x8" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
+      <paths name="(Ubuntu4090)yuange@43.138.203.150:5090">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="(Ubuntu4090)yuange@43.138.203.150:5090 (2)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="(XVerse_V100x8)yuange@175.178.165.93:22">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/tmp/pycharm_project_523" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="XVerse_V100x8">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/cfs/yuange/code/XTryOn" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="local">
         <serverdata>
           <mappings>
             <mapping deploy="/home/yuange/program/PyCharmRemote/XTryOn" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="yuange@175.178.165.93:22 password (2)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>
