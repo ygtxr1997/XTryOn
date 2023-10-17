@@ -133,7 +133,21 @@ def save_mask_data(output_dir, mask_list, box_list, label_list):
 
 
 if __name__ == "__main__":
-
+    """
+    export AM_I_DOCKER=False
+    export BUILD_WITH_CUDA=True
+    export CUDA_HOME=/usr/local/cuda-11.3/
+    python grounded_sam_demo.py \
+      --config GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py \
+      --grounded_checkpoint ../../pretrained/sam/groundingdino_swint_ogc.pth \
+      --sam_checkpoint ../../pretrained/sam/sam_vit_h_4b8939.pth \
+      --input_image taobao.jpg \
+      --output_dir "outputs" \
+      --box_threshold 0.3 \
+      --text_threshold 0.25 \
+      --text_prompt "hoodie.trousers.hand.head" \
+      --device "cuda"
+    """
     parser = argparse.ArgumentParser("Grounded-Segment-Anything Demo", add_help=True)
     parser.add_argument("--config", type=str, required=True, help="path to config file")
     parser.add_argument(
