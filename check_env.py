@@ -18,9 +18,9 @@ from datasets import Processor
 #     cv2.imwrite(f"./tmp_dw_pose_{fn}", detected_map)
 
 proc = Processor(
-    root="/cfs/yuange/datasets/xss/trousers/",
-    out_dir="/cfs/yuange/datasets/xss/standard/trousers/",
-    extract_keys=["dwpose", ],
-    is_debug=True,
-)
+        root="/cfs/yuange/datasets/xss/trousers/",
+        out_dir="/cfs/yuange/datasets/xss/standard/trousers/",
+        extract_keys=["dwpose", "densepose"],
+        is_debug=True,
+    )
 proc.run()

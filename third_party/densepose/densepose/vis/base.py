@@ -121,10 +121,6 @@ class MatrixAsPilVisualizer:
         pil = PIL.Image.fromarray(image_target_gray.astype(np.uint8)).convert("P")
         pil.putpalette(palette)
 
-        matrix_pil = PIL.Image.fromarray(mask_bg.astype(np.uint8)).convert("P")
-        matrix_pil.putpalette(palette)
-        matrix_pil.save("tmp_matrix.png")
-
         return pil
 
     def _resize(self, mask, matrix, w, h):

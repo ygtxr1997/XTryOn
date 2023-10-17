@@ -9,6 +9,8 @@ import numpy as np
 from PIL import Image
 import torch
 
+make_abs_path = lambda fn: os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), fn))
+sys.path.append(make_abs_path('./'))
 from detectron2.config import CfgNode, get_cfg
 from detectron2.data.detection_utils import read_image
 from detectron2.engine.defaults import DefaultPredictor
@@ -44,9 +46,6 @@ from densepose.vis.extractor import (
 )
 
 
-make_abs_path = lambda fn: os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), fn))
-
-
 class Detectron2BatchInfer(object):
 
     VISUALIZERS: ClassVar[Dict[str, object]] = {
@@ -63,8 +62,8 @@ class Detectron2BatchInfer(object):
     def __init__(self, args: argparse.Namespace = None):
         if args is None:
             args = argparse.Namespace()
-        args.cfg = make_abs_path("configs/densepose_rcnn_R_101_FPN_DL_s1x.yaml")
-        args.model = make_abs_path("./pretrained/model_final_844d15.pkl")
+        args.cfg = make_abs_path("./configs/densepose_rcnn_R_101_FPN_DL_s1x.yaml")
+        args.model = make_abs_path("../../pretrained/densepose/model_final_844d15.pkl")
         args.visualizations = "dp_segm"
         args.opts = []
 

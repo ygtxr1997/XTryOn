@@ -389,6 +389,7 @@ class DensePosePilVisualizer(DensePoseResultsVisualizer):
                 (result.labels[None].type(torch.float32), result.uv * 255.0)
             ).type(torch.uint8)
             self.visualize_iuv_arr(context, iuv_array.cpu().numpy(), boxes_xywh[i])
+            break  # only show 1st element
         image_pil = self.context_to_image_bgr(context)
         return image_pil
 

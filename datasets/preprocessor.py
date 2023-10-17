@@ -2,14 +2,14 @@ import os
 from typing import Union
 
 import numpy as np
-from PIL import Image
+import PIL.Image
 from tqdm import tqdm
 
 import torch
 from torch.utils.data import DataLoader
 
 from .datasets import CrawledDataset
-from third_party.dwpose import DWPoseBatchInfer
+from third_party import DWPoseBatchInfer, Detectron2BatchInfer
 from tools import tensor_to_rgb
 
 
@@ -44,28 +44,39 @@ class Processor(object):
         for model in model_names:
             if model == "dwpose":
                 extractors[model] = DWPoseBatchInfer()
+            elif model == "densepose":
+                extractors[model] = Detectron2BatchInfer()
             else:
-                print(f"[Waring] Not supported extractor: {model}")
+                print(f"[Warning] Not supported extractor: {model}")
 
         self.extractors = extractors
         return self.extractors
 
     def _extract_and_save(self, in_tensor: torch.Tensor, idx: int, key: str):
         batch_infer = self.extractors[key]
-        detected = batch_infer.forward_as_rgb(in_tensor)
+        in_rgb = tensor_to_rgb(in_tensor)
+        if key in ("dwpose", ):
+            detected = batch_infer.forward_rgb_as_rgb(in_rgb)
+        elif key in ("densepose", ):
+            detected = batch_infer.forward_rgb_as_pil(in_rgb)
+        else:
+            raise KeyError(f"Not supported extractor type: {key}")
         self._save_as_pil(detected, idx, key)
         return detected
 
-    def _save_as_pil(self, in_tensor: torch.Tensor, idx: int, key: str):
+    def _save_as_pil(self, in_data: Union[torch.Tensor, np.ndarray, PIL.Image.Image],
+                     idx: int, key: str):
         save_dir = os.path.join(self.out_dir, key)
         os.makedirs(save_dir, exist_ok=True)
-        if isinstance(in_tensor, np.ndarray):
-            pil = Image.fromarray(in_tensor)
-        elif isinstance(in_tensor, torch.Tensor):
-            pil = tensor_to_rgb(in_tensor, out_as_pil=True)
+        if isinstance(in_data, np.ndarray):
+            pil = PIL.Image.fromarray(in_data)
+        elif isinstance(in_data, torch.Tensor):
+            pil = tensor_to_rgb(in_data, out_as_pil=True)
+        elif isinstance(in_data, PIL.Image.Image):
+            pil = in_data
         else:
-            raise TypeError(f"Input type not supported: {type(in_tensor)}")
-        pil.save(os.path.join(save_dir, "%07d.jpg" % idx))
+            raise TypeError(f"Input type not supported: {type(in_data)}")
+        pil.save(os.path.join(save_dir, "%07d.png" % idx))
 
     def process_step(self, batch, batch_idx):
         person = batch["person"]
@@ -95,7 +106,7 @@ if __name__ == "__main__":
     proc = Processor(
         root="/cfs/yuange/datasets/xss/trousers/",
         out_dir="/cfs/yuange/datasets/xss/standard/",
-        extract_keys=["dwpose",],
+        extract_keys=["dwpose", "densepose"],
         is_debug=True,
     )
     proc.run()

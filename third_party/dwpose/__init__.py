@@ -9,7 +9,6 @@ os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
 import torch
 import numpy as np
-from tools import tensor_to_rgb
 from . import util
 from .wholebody import Wholebody
 
@@ -73,8 +72,7 @@ class DWPoseBatchInfer(object):
     def __init__(self):
         self.processor = DWposeDetector()
 
-    def forward_as_rgb(self, x_tensor: torch.Tensor):
-        assert x_tensor.shape[0] == 1, "Batch size >1 is not supported"
-        x_arr = tensor_to_rgb(x_tensor, 0)
+    def forward_rgb_as_rgb(self, x_arr: np.ndarray):
+        assert len(x_arr.shape) == 3, "Only HWC is supported"
         detected_map = self.processor(x_arr)
         return detected_map
