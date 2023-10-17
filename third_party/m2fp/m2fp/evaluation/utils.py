@@ -3,7 +3,7 @@ from PIL import Image
 
 from detectron2.utils.file_io import PathManager
 
-def load_image_into_numpy_array(filename, copy=False, dtype=np.int):
+def load_image_into_numpy_array(filename, copy=False, dtype=np.int32):
     with PathManager.open(filename, "rb") as f:
         array = np.array(Image.open(f), copy=copy, dtype=dtype)
         if len(array.shape) == 3:

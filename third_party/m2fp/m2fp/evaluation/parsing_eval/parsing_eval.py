@@ -380,7 +380,7 @@ class ParsingEval(object):
             jmax = -1
 
             mask0 = parsings[cur_id].toarray()
-            mask_pred = mask0.astype(np.int)
+            mask_pred = mask0.astype(np.int32)
             mask_gt_u = seg_iou_max = None
             for i in range(len(R[0]['anno_adds'])):
                 mask_gt = R[0]['anno_adds'][i]
