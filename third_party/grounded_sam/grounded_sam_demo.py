@@ -137,7 +137,7 @@ if __name__ == "__main__":
     export AM_I_DOCKER=False
     export BUILD_WITH_CUDA=True
     export CUDA_HOME=/usr/local/cuda-11.3/
-    python grounded_sam_demo.py \
+    CUDA_VISIBLE_DEVICES=1 python grounded_sam_demo.py \
       --config GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py \
       --grounded_checkpoint ../../pretrained/sam/groundingdino_swint_ogc.pth \
       --sam_checkpoint ../../pretrained/sam/sam_vit_h_4b8939.pth \

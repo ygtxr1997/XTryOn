@@ -62,10 +62,10 @@ class CrawledDataset(Dataset):
                 index = f"{index_prefix}_({index_sub})"
 
             indicator = fn[len(index_prefix) + 1]  # "1":cloth "2":person
-            if indicator == "2":
+            if indicator == "1":
                 assert cloths.get(index) is None, "Duplicate keys in cloth"
                 cloths[index] = os.path.join(abs_dir, fn)
-            elif indicator == "1":
+            elif indicator == "2":
                 assert persons.get(index) is None, "Duplicate keys in person"
                 persons[index] = os.path.join(abs_dir, fn)
 

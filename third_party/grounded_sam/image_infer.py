@@ -1,4 +1,5 @@
 import os
+import sys
 import argparse
 
 import cv2
@@ -9,6 +10,9 @@ import matplotlib.pyplot as plt
 
 import torch
 from torchvision.transforms import transforms
+
+make_abs_path = lambda fn: os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), fn))
+sys.path.append(make_abs_path('./'))
 
 # Grounding DINO
 import GroundingDINO.groundingdino.datasets.transforms as T
@@ -24,8 +28,56 @@ from segment_anything import (
     SamPredictor
 )
 
+from tools import crop_arr_according_bbox, tensor_to_rgb
+
 
 make_abs_path = lambda fn: os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), fn))
+
+
+def show_mask(mask, ax, random_color=False):
+    if random_color:
+        color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
+    else:
+        color = np.array([30/255, 144/255, 255/255, 0.6])
+    h, w = mask.shape[-2:]
+    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
+    ax.imshow(mask_image)
+
+
+def show_box(box, ax, label):
+    x0, y0 = box[0], box[1]
+    w, h = box[2] - box[0], box[3] - box[1]
+    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))
+    ax.text(x0, y0, label)
+
+
+def save_mask_data(output_dir, mask_list, box_list, label_list):
+    value = 0  # 0 for background
+
+    mask_img = torch.zeros(mask_list.shape[-2:])
+    for idx, mask in enumerate(mask_list):
+        mask_img[mask.cpu().numpy()[0] == True] = value + idx + 1
+    plt.figure(figsize=(10, 10))
+    plt.imshow(mask_img.numpy())
+    plt.axis('off')
+    plt.savefig(os.path.join(output_dir, 'mask.jpg'), bbox_inches="tight", dpi=300, pad_inches=0.0)
+
+    json_data = [{
+        'value': value,
+        'label': 'background'
+    }]
+    for label, box in zip(label_list, box_list):
+        value += 1
+        name, logit = label.split('(')
+        logit = logit[:-1] # the last is ')'
+        json_data.append({
+            'value': value,
+            'label': name,
+            'logit': float(logit),
+            'box': box.numpy().tolist(),
+        })
+    with open(os.path.join(output_dir, 'mask.json'), 'w') as f:
+        json.dump(json_data, f)
 
 
 class GroundedSAMBatchInfer(object):
@@ -66,12 +118,25 @@ class GroundedSAMBatchInfer(object):
         self.predictor = SamPredictor(
             sam_model_registry[self.sam_version](checkpoint=self.sam_checkpoint).to(self.device))
 
-    def forward_tensor_as_pil(self, x_tensor: torch.Tensor, x_pil: Image.Image, caption: str):
+        self.trans = T.Compose(
+            [
+                T.RandomResize([800], max_size=1333),
+                T.ToTensor(),
+                T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            ]
+        )
+
+    @torch.no_grad()
+    def forward_rgb_as_dict(self, x_arr: np.ndarray, caption: str) -> dict:
+        x_pil = Image.fromarray(x_arr.astype(np.uint8))
+        x_tensor, _ = self.trans(x_pil, None)
+        x_tensor = x_tensor.unsqueeze(0).cuda()
+
         boxes_filt, pred_phrases = self.get_grounding_output(
             x_tensor, caption,
         )
 
-        self.predictor.set_image(np.array(x_pil).astype(np.uint8))
+        self.predictor.set_image(x_arr)
 
         size = x_pil.size
         H, W = size[1], size[0]
@@ -81,7 +146,7 @@ class GroundedSAMBatchInfer(object):
             boxes_filt[i][2:] += boxes_filt[i][:2]
         boxes_filt = boxes_filt.cpu()
         transformed_boxes = self.predictor.transform.apply_boxes_torch(
-            boxes_filt, x_tensor.shape[:2]).to(self.device)
+            boxes_filt, x_arr.shape[:2]).to(self.device)
 
         masks, _, _ = self.predictor.predict_torch(
             point_coords=None,
@@ -90,10 +155,17 @@ class GroundedSAMBatchInfer(object):
             multimask_output=False,
         )
 
+        # post process
+        masks_rgb = [tensor_to_rgb(msk, 0, is_zero_center=False, out_as_binary_mask=True) for msk in masks]
+        boxes_filt = [box.cpu().numpy() for box in boxes_filt]
+        pred_names = [phrase.split('(')[0] for phrase in pred_phrases]
+        pred_logits = [float(phrase.split('(')[1][:-1]) for phrase in pred_phrases]
+
         return {
-            "masks": masks,
-            "boxes": boxes_filt,
-            "phrases": pred_phrases,
+            "masks": masks_rgb,  # each is: np.array, (B,H,W), in {0,255}
+            "boxes": boxes_filt,  # each is: np.array, (4,), xyrb
+            "names": pred_names,  # each is: "name"
+            "logits": pred_logits,  # each is: float(0.xx)
         }
 
     def load_model(self):
@@ -142,22 +214,33 @@ class GroundedSAMBatchInfer(object):
 
 if __name__ == "__main__":
     infer = GroundedSAMBatchInfer()
-    img_pil = Image.open("./taobao.jpg").convert("RGB")
-    img = np.array(img_pil).astype(np.float32)
-    img = torch.FloatTensor(img).permute(2, 1, 0)
-    img = transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])(img)
-    img = img.unsqueeze(0).cuda()
-    cap = "hoodie"
+    img_pil = Image.open("./hoodie_cloth.jpg").convert("RGB")
+    img_arr = np.array(img_pil).astype(np.uint8)
+    cap = "hoodie.trousers.hand.head"
 
-    res_dict = infer.forward_tensor_as_pil(
-        img, img_pil, cap
+    res_dict = infer.forward_rgb_as_dict(
+        img_arr, cap
     )
     masks = res_dict["masks"]
     boxes = res_dict["boxes"]
-    phrases = res_dict["phrases"]
+    names = res_dict["names"]
+    logits = res_dict["logits"]
+    print(names, logits)
 
-    for i in range(len(masks)):
+    for i in range(len(names)):
         print(f"--------------- {i} --------------")
-        print(masks[i].shape)
-        print(boxes[i].shape)
-        print(phrases[i])
+        mask = masks[i]
+        bbox = boxes[i]
+        name = names[i]
+        logit = logits[i]
+        print(name, logit, mask.shape, mask.min(), mask.max())
+        if name == "hoodie":
+            cropped = crop_arr_according_bbox(
+                img_arr, bbox
+            )
+            Image.fromarray(cropped.astype(np.uint8)).save("tmp_cropped.png")
+
+            mask_cropped = crop_arr_according_bbox(
+                mask, bbox
+            )
+            Image.fromarray(mask_cropped.astype(np.uint8)).save("tmp_mask_cropped.png")
