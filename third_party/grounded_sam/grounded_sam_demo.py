@@ -141,11 +141,11 @@ if __name__ == "__main__":
       --config GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py \
       --grounded_checkpoint ../../pretrained/sam/groundingdino_swint_ogc.pth \
       --sam_checkpoint ../../pretrained/sam/sam_vit_h_4b8939.pth \
-      --input_image taobao.jpg \
+      --input_image ./0000073.png \
       --output_dir "outputs" \
       --box_threshold 0.3 \
       --text_threshold 0.25 \
-      --text_prompt "hoodie.trousers.hand.head" \
+      --text_prompt "object" \
       --device "cuda"
     """
     parser = argparse.ArgumentParser("Grounded-Segment-Anything Demo", add_help=True)

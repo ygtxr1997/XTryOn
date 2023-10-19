@@ -1,5 +1,6 @@
 import json
 import os
+import imagesize
 import glob
 from typing import Union
 
@@ -19,8 +20,20 @@ class CrawledDataset(Dataset):
                  max_len: int = None,
                  ):
         self.root = root
-        self.resolution_dirs = os.listdir(root)
-        self.resolution_dirs.sort()
+        is_last_dir = True  # only contains image files, without any folder
+        for subdir in os.listdir(root):
+            if os.path.isdir(os.path.join(root, subdir)):
+                is_last_dir = False
+                break
+        if not is_last_dir:  # ".../xss/non_standard/hoodie/"
+            resolution_abs_dirs = [os.path.join(root, rel_dir) for rel_dir in os.listdir(root)]
+        else:  # ".../xss/non_standard/hoodie/720_20231018_full/"
+            resolution_abs_dirs = [root]
+        self.resolution_abs_dirs = []
+        for abs_dir in resolution_abs_dirs:
+            if os.path.isdir(abs_dir):
+                self.resolution_abs_dirs.append(abs_dir)
+        self.resolution_abs_dirs.sort()
 
         self.persons, self.cloths = self._get_paired_lists()
 
@@ -36,9 +49,8 @@ class CrawledDataset(Dataset):
     def _get_paired_lists(self):
         person_dict = {}
         cloth_dict = {}
-        for res_dir in self.resolution_dirs:
-            self._split_fns_as_pairs(os.path.join(self.root, res_dir),
-                                     person_dict, cloth_dict)
+        for res_abs_dir in self.resolution_abs_dirs:
+            self._split_fns_as_pairs(res_abs_dir, person_dict, cloth_dict)
 
         persons = []
         cloths = []
@@ -56,18 +68,102 @@ class CrawledDataset(Dataset):
         fns.sort()
 
         for fn in fns:  # "xxxx-1 (2).png"
-            index = index_prefix = fn.split("-")[0]
-            if "(" and ")" in fn:
-                index_sub = fn[fn.find("(") + 1]
-                index = f"{index_prefix}_({index_sub})"
+            if imagesize.get(os.path.join(abs_dir, fn)) == (-1, -1):  # check is image file
+                print(f"[Warning] skip non-image file: {fn} under {abs_dir}.")
+                continue
 
-            indicator = fn[len(index_prefix) + 1]  # "1":cloth "2":person
-            if indicator == "1":
-                assert cloths.get(index) is None, "Duplicate keys in cloth"
+            index_prefix = fn.split("-")[0][:]
+            indicator_pos = len(index_prefix) + 1
+            index_suffix = fn.split(".")[0][indicator_pos + 1:]
+            index = f"{index_prefix}_{index_suffix}"
+
+            indicator = fn[indicator_pos]  # "1":cloth "2":person
+            if indicator in ("1",):
+            # if indicator in ("2", "3", "4", "5", "6", "7", "8", "9",):  # reversed
+                assert cloths.get(index) is None, f"Duplicate keys in cloth: {fn}"
                 cloths[index] = os.path.join(abs_dir, fn)
-            elif indicator == "2":
-                assert persons.get(index) is None, "Duplicate keys in person"
+            elif indicator in ("2", "3", "4", "5", "6", "7", "8", "9",):
+            # elif indicator in ("1",):  # reversed
+                assert persons.get(index) is None, f"Duplicate keys in person: {fn}"
                 persons[index] = os.path.join(abs_dir, fn)
+
+        return persons, cloths
+
+    def __getitem__(self, index):
+        person_path = self.persons[index]
+        cloth_path = self.cloths[index]
+
+        person = Image.open(person_path).convert("RGB")
+        cloth = Image.open(cloth_path).convert("RGB")
+
+        person = self.transform(person)
+        cloth = self.transform(cloth)
+
+        return {
+            "person": person,
+            "cloth": cloth,
+        }
+
+    def __len__(self):
+        if self.max_len is not None:
+            return self.max_len
+        return len(self.persons)
+
+
+class StandardDataset(Dataset):
+    def __init__(self, root: str,
+                 max_len: int = None,
+                 reverse_person_and_cloth: bool = False,
+                 person_key: str = "person",
+                 cloth_key: str = "cloth",
+                 ):
+        self.root = root
+        self.person_key = person_key
+        self.cloth_key = cloth_key
+        is_last_dir = False  # last_dir should contain "person", "cloth" folders
+        for subdir in os.listdir(root):
+            if "person" == subdir:
+                is_last_dir = True
+                break
+        if not is_last_dir:  # ".../xss/standard/hoodie/"
+            resolution_abs_dirs = [os.path.join(root, rel_dir) for rel_dir in os.listdir(root)]
+        else:  # ".../xss/standard/hoodie/720_20231018_full/"
+            resolution_abs_dirs = [root]
+        self.resolution_abs_dirs = []
+        for abs_dir in resolution_abs_dirs:
+            if os.path.isdir(abs_dir):
+                self.resolution_abs_dirs.append(abs_dir)
+        self.resolution_abs_dirs.sort()
+
+        self.reverse_person_and_cloth = reverse_person_and_cloth
+        self.persons, self.cloths = self._get_paired_lists()
+
+        self.transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(0.5, 0.5)
+        ])
+
+        self.max_len = max_len
+
+        print(f"[CrawledDataset] dataset loaded from: {root}")
+
+    def _get_paired_lists(self):
+        persons = []
+        cloths = []
+        for res_abs_dir in self.resolution_abs_dirs:
+            person_abs_folder = os.path.join(res_abs_dir, self.person_key)
+            cloth_abs_folder = os.path.join(res_abs_dir, self.cloth_key)
+
+            person_fns = os.listdir(person_abs_folder)
+            cloth_fns = os.listdir(cloth_abs_folder)
+            person_fns.sort()
+            cloth_fns.sort()
+
+            person_abs_paths = [os.path.join(person_abs_folder, fn) for fn in person_fns]
+            cloth_abs_paths = [os.path.join(cloth_abs_folder, fn) for fn in cloth_fns]
+
+            persons.extend(person_abs_paths)
+            cloths.extend(cloth_abs_paths)
 
         return persons, cloths
 

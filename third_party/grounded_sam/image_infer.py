@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 
 import torch
 from torchvision.transforms import transforms
+import warnings
+warnings.filterwarnings("ignore")
 
 make_abs_path = lambda fn: os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), fn))
 sys.path.append(make_abs_path('./'))
@@ -128,6 +130,12 @@ class GroundedSAMBatchInfer(object):
 
     @torch.no_grad()
     def forward_rgb_as_dict(self, x_arr: np.ndarray, caption: str) -> dict:
+        """
+
+        :param x_arr: (H,W,C)
+        :param caption: string
+        :return: {"masks", "boxes", "names", "logits"}
+        """
         x_pil = Image.fromarray(x_arr.astype(np.uint8))
         x_tensor, _ = self.trans(x_pil, None)
         x_tensor = x_tensor.unsqueeze(0).cuda()
@@ -135,7 +143,6 @@ class GroundedSAMBatchInfer(object):
         boxes_filt, pred_phrases = self.get_grounding_output(
             x_tensor, caption,
         )
-
         self.predictor.set_image(x_arr)
 
         size = x_pil.size
@@ -162,11 +169,78 @@ class GroundedSAMBatchInfer(object):
         pred_logits = [float(phrase.split('(')[1][:-1]) for phrase in pred_phrases]
 
         return {
-            "masks": masks_rgb,  # each is: np.array, (B,H,W), in {0,255}
+            "masks": masks_rgb,  # each is: np.array, (H,W,C), in {0,255}
             "boxes": boxes_filt,  # each is: np.array, (4,), xyrb
             "names": pred_names,  # each is: "name"
             "logits": pred_logits,  # each is: float(0.xx)
         }
+
+    def post_crop_according_prompt(self, x_arr: np.ndarray, sam_dict: dict, prompt: str):
+        """
+
+        :param x_arr:
+        :param sam_dict:
+        :param prompt:
+        :return: {"images_crop", "masks_crop", "boxes", "names", "logits"}
+        """
+        masks = sam_dict["masks"]
+        boxes = sam_dict["boxes"]
+        names = sam_dict["names"]
+        logits = sam_dict["logits"]
+
+        images_crop = []
+        masks_crop = []
+        boxes_ret = []
+        names_ret = []
+        logits_ret = []
+        pairs_score_index = []
+
+        cnt = 0
+        for i in range(len(names)):
+            mask = masks[i]
+            bbox = boxes[i]
+            name = names[i]
+            logit = logits[i]
+
+            if (name == prompt) or (prompt in name):  # matched
+                image_cropped = crop_arr_according_bbox(x_arr, bbox)
+                if prompt == "background":
+                    mask = 255 - mask  # non-background
+                mask_cropped = crop_arr_according_bbox(mask, bbox)
+                images_crop.append(image_cropped)
+                masks_crop.append(mask_cropped)
+                boxes_ret.append(bbox)
+                names_ret.append(name)
+                logits_ret.append(logit)
+                pairs_score_index.append((logit * self.get_bbox_size(bbox), cnt))  # logit * bbox_size
+                cnt += 1
+
+        pairs_score_index.sort(reverse=True)  # high to low
+        final_order = [pair[1] for pair in pairs_score_index]
+        images_crop = self.reorder_list(images_crop, final_order)
+        masks_crop = self.reorder_list(masks_crop, final_order)
+        boxes_ret = self.reorder_list(boxes_ret, final_order)
+        names_ret = self.reorder_list(names_ret, final_order)
+        logits_ret = self.reorder_list(logits_ret, final_order)
+
+        return {
+            "images_crop": images_crop,  # each is: np.array, (B,cH,cW), in {0,255}
+            "masks_crop": masks_crop,  # each is: np.array, (B,cH,cW), in {0,255}
+            "boxes": boxes_ret,  # each is: np.array, (4,), xyrb
+            "names": names_ret,  # each is: "name"
+            "logits": logits_ret,  # each is: float(0.xx)
+        }
+
+    def reorder_list(self, in_list: list, final_order: list):
+        assert len(in_list) == len(final_order)
+        ret_list = [None] * len(in_list)
+        for k in range(len(in_list)):
+            ret_list[k] = in_list[final_order[k]]
+        return ret_list
+
+    def get_bbox_size(self, bbox: np.ndarray):
+        x, y, r, b = bbox[0], bbox[1], bbox[2], bbox[3]
+        return (r - x) * (b - y)
 
     def load_model(self):
         args = SLConfig.fromfile(self.config_file)
@@ -186,7 +260,7 @@ class GroundedSAMBatchInfer(object):
         model = self.model
         image = image.to(self.device)
         with torch.no_grad():
-            outputs = model(image, captions=[caption])
+            outputs = model(image, captions=[caption])  # warning due to checkpoint?
         logits = outputs["pred_logits"].cpu().sigmoid()[0]  # (nq, 256)
         boxes = outputs["pred_boxes"].cpu()[0]  # (nq, 4)
 
@@ -214,33 +288,27 @@ class GroundedSAMBatchInfer(object):
 
 if __name__ == "__main__":
     infer = GroundedSAMBatchInfer()
-    img_pil = Image.open("./hoodie_cloth.jpg").convert("RGB")
+    img_pil = Image.open("./3103-1.jpg").convert("RGB")
     img_arr = np.array(img_pil).astype(np.uint8)
-    cap = "hoodie.trousers.hand.head"
+    cap = "hoodie.hat"
 
     res_dict = infer.forward_rgb_as_dict(
         img_arr, cap
     )
-    masks = res_dict["masks"]
-    boxes = res_dict["boxes"]
-    names = res_dict["names"]
-    logits = res_dict["logits"]
-    print(names, logits)
+    post_dict = infer.post_crop_according_prompt(
+        img_arr, res_dict, "hoodie"
+    )
+    t_images = post_dict["images_crop"]
+    t_masks = post_dict["masks_crop"]
+    t_boxes = post_dict["boxes"]
+    t_names = post_dict["names"]
+    t_logits = post_dict["logits"]
 
-    for i in range(len(names)):
-        print(f"--------------- {i} --------------")
-        mask = masks[i]
-        bbox = boxes[i]
-        name = names[i]
-        logit = logits[i]
-        print(name, logit, mask.shape, mask.min(), mask.max())
-        if name == "hoodie":
-            cropped = crop_arr_according_bbox(
-                img_arr, bbox
-            )
-            Image.fromarray(cropped.astype(np.uint8)).save("tmp_cropped.png")
+    for i in range(len(t_names) - 1, -1, -1):
+        print(f"--------------- reverse {i} --------------")
+        print("score:", f"({t_names[i]})=({t_logits[i]}), bbox={t_boxes[i]}")
+        t_image_cropped = t_images[i]
+        t_mask_cropped = t_masks[i]
 
-            mask_cropped = crop_arr_according_bbox(
-                mask, bbox
-            )
-            Image.fromarray(mask_cropped.astype(np.uint8)).save("tmp_mask_cropped.png")
+        Image.fromarray(t_image_cropped.astype(np.uint8)).save("tmp_cropped.png")
+        Image.fromarray(t_mask_cropped.astype(np.uint8)).save("tmp_mask_cropped.png")
