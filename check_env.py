@@ -9,7 +9,8 @@ from datasets import Processor
 
 def main(opts):
     step = opts.step
-    in_folder = "720_20231017_reordered_subpart"
+    in_folder = "1080_20231019_picked"
+    dataset_len = len(os.listdir(f"/cfs/yuange/datasets/xss/non_standard/hoodie/{in_folder}")) // 2 + 100
     cloth_type = "hoodie"
     cuda_device = int(os.getenv("CUDA_VISIBLE_DEVICES"))
 
@@ -17,10 +18,10 @@ def main(opts):
         # 1. predict is person or cloth, crop based on grounded_sam, save ori
         in_root = f"/cfs/yuange/datasets/xss/non_standard/hoodie/{in_folder}"
         out_dir = f"/cfs/yuange/datasets/xss/standard/hoodie/{in_folder}"
-        task1 = list(np.arange(0, 600))
-        task2 = list(np.arange(600, 1200))
-        task3 = list(np.arange(1200, 1800))
-        task4 = list(np.arange(1800, 9999))
+        task1 = list(np.arange(0, int(dataset_len / 4 * 1)))
+        task2 = list(np.arange(int(dataset_len / 4 * 1), int(dataset_len / 4 * 2)))
+        task3 = list(np.arange(int(dataset_len / 4 * 2), int(dataset_len / 4 * 3)))
+        task4 = list(np.arange(int(dataset_len / 4 * 3), 99999))
         tasks = [task1, task2, task3, task4]
         task = tasks[cuda_device]
         proc = Processor(
@@ -37,7 +38,7 @@ def main(opts):
         proc.run()
 
     elif step == 2:
-        # 2. after checking manually, pick out the indices and reverse their person & cloth
+        # 2. after checking manually, pick out the indices and reverse their person & cloth explicitly
         in_root = f"/cfs/yuange/datasets/xss/standard/hoodie/{in_folder}"
         out_dir = f"/cfs/yuange/datasets/xss/standard/hoodie/{in_folder}"
         specific_indices = [

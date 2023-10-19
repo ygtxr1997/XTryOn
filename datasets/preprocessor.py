@@ -65,7 +65,7 @@ class Processor(object):
         )
 
         self.extractors = self._get_extractors(extract_keys)
-        print(f"[Processor] Dataset loaded from {root}, len={max_len}; "
+        print(f"[Processor] Dataset loaded from {root}, len={len(self.dataset)}; "
               f"Extractors loaded: {self.extractors.keys()}")
 
     def _get_extractors(self, model_names: list):
