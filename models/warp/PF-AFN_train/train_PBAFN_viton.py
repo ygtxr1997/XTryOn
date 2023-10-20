@@ -12,13 +12,14 @@ from tensorboardX import SummaryWriter
 import cv2
 import datetime
 
+from datasets.cp_datasets import CPDataset
+
 opt = TrainOptions().parse()
 path = 'runs/' + opt.name
 os.makedirs(path, exist_ok=True)
 
 
 def CreateDataset(opt):
-    from data.cp_dataset import CPDataset
     dataset = CPDataset(opt.dataroot, mode='train', image_size=256)
     # print("dataset [%s] was created" % (dataset.name()))
     # dataset.initialize(opt)

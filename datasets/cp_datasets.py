@@ -12,7 +12,7 @@ import numpy as np
 class CPDataset(data.Dataset):
     """
         Dataset for training Warp-Net.
-        Copied from: https://github.com/bcmi/DCI-VTON-Virtual-Try-On/blob/main/warp/train/data/cp_dataset.py
+        Modified on: https://github.com/bcmi/DCI-VTON-Virtual-Try-On/blob/main/warp/train/data/cp_dataset.py
     """
 
     def __init__(self, dataroot, image_size=512, mode='train', semantic_nc=13):
@@ -43,6 +43,9 @@ class CPDataset(data.Dataset):
         self.c_names = dict()
         self.c_names['paired'] = im_names
         self.c_names['unpaired'] = c_names
+
+    def load_data_list(self):
+        pass
 
     def name(self):
         return "CPDataset"
