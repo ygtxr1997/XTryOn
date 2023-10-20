@@ -9,7 +9,7 @@ from datasets import Processor
 
 def main(opts):
     step = opts.step
-    in_folder = "1080_20231019_picked"
+    in_folder = "720_20231017_reordered_subpart"  # "720_20231017_reordered_subpart"
     dataset_len = len(os.listdir(f"/cfs/yuange/datasets/xss/non_standard/hoodie/{in_folder}")) // 2 + 100
     cloth_type = "hoodie"
     cuda_device = int(os.getenv("CUDA_VISIBLE_DEVICES"))
@@ -109,13 +109,13 @@ def main(opts):
         proc.run()
 
     elif step == 5:
-        # 5. get dwpose, densepose
+        # 5. get dwpose, densepose, m2fp parsing,
         in_root = f"/cfs/yuange/datasets/xss/standard/hoodie/{in_folder}"
         out_dir = f"/cfs/yuange/datasets/xss/standard/hoodie/{in_folder}"
         proc = Processor(
             root=in_root,
             out_dir=out_dir,
-            extract_keys=["dwpose", "densepose"],
+            extract_keys=["agnostic_gen"],  # ["dwpose", "densepose", "m2fp", "agnostic_gen"]
             cloth_type=cloth_type,
             is_root_standard=bool("non_standard" not in in_root),
             is_debug=False,
@@ -125,7 +125,7 @@ def main(opts):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Dataset Processing", add_help=True)
-    parser.add_argument("--step", type=int, default=1, help="using debug mode")
+    parser.add_argument("--step", type=int, default=5, help="process which step")
     args = parser.parse_args()
 
     main(args)

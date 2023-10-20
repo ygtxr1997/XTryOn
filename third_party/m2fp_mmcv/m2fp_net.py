@@ -517,35 +517,6 @@ class M2FP(nn.Module):
 
         return category_probs
 
-    def get_segment_classes(self, is_multiple: bool = True):
-        seg_class_list = [
-            "Background",   # 0
-            "Hat",          # 1
-            "Hair",         # 2
-            "Gloves",       # 3
-            "Sunglasses",   # 4
-            "UpperClothes", # 5
-            "Dress",        # 6
-            "Coat",         # 7
-            "Socks",        # 8
-            "Pants",        # 9
-            "Torso-skin",   # 10
-            "Scarf",        # 11
-            "Skirt",        # 12
-            "Face",         # 13
-            "Left-arm",     # 14
-            "Right-arm",    # 15
-            "Left-leg",     # 16
-            "Right-leg",    # 17
-            "Left-shoe",    # 18
-            "Right-shoe",   # 19
-            "Human"         # 20
-        ]
-        seg_class_dict = {}
-        for i in range(len(seg_class_list)):
-            seg_class_dict[seg_class_list[i]] = i
-        return seg_class_list, seg_class_dict
-
 
 class M2FPHead(nn.Module):
 

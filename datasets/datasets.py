@@ -116,10 +116,13 @@ class StandardDataset(Dataset):
                  reverse_person_and_cloth: bool = False,
                  person_key: str = "person",
                  cloth_key: str = "cloth",
+                 parsing_key: str = "m2fp",
                  ):
         self.root = root
         self.person_key = person_key
         self.cloth_key = cloth_key
+        self.parsing_key = parsing_key
+
         is_last_dir = False  # last_dir should contain "person", "cloth" folders
         for subdir in os.listdir(root):
             if "person" == subdir:
@@ -137,6 +140,7 @@ class StandardDataset(Dataset):
 
         self.reverse_person_and_cloth = reverse_person_and_cloth
         self.persons, self.cloths = self._get_paired_lists()
+        self.parsings = self._get_parsing_list()
 
         self.transform = transforms.Compose([
             transforms.ToTensor(),
@@ -167,20 +171,41 @@ class StandardDataset(Dataset):
 
         return persons, cloths
 
+    def _get_parsing_list(self):
+        parsings = []
+        for res_abs_dir in self.resolution_abs_dirs:
+            parsing_abs_folder = os.path.join(res_abs_dir, self.parsing_key)
+            parsing_fns = os.listdir(parsing_abs_folder)
+            parsing_fns.sort()
+            parsing_abs_paths = [os.path.join(parsing_abs_folder, fn) for fn in parsing_fns]
+            parsings.extend(parsing_abs_paths)
+        if len(parsings) == 0:
+            parsings = [""] * len(self.persons)
+        assert len(parsings) == len(self.persons), "#Parsing images doesn't equal to #Person images."
+        return parsings
+
     def __getitem__(self, index):
         person_path = self.persons[index]
         cloth_path = self.cloths[index]
+        parsing_path = self.parsings[index]
 
+        ret_dict = {}
         person = Image.open(person_path).convert("RGB")
         cloth = Image.open(cloth_path).convert("RGB")
-
         person = self.transform(person)
         cloth = self.transform(cloth)
+        c, h, w = person.shape
+        ret_dict["person"] = person
+        ret_dict["cloth"] = cloth
 
-        return {
-            "person": person,
-            "cloth": cloth,
-        }
+        if os.path.exists(parsing_path):
+            parsing = Image.open(parsing_path)
+            parsing = np.array(parsing).astype(np.uint8)
+            ret_dict["parsing"] = parsing
+        else:
+            ret_dict["parsing"] = np.zeros((h, w), dtype=np.uint8)
+
+        return ret_dict
 
     def __len__(self):
         if self.max_len is not None:

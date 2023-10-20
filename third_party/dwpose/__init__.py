@@ -5,6 +5,7 @@
 # 4th Edited by ControlNet (added face and correct hands)
 
 import os
+import json
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
 import torch
@@ -65,14 +66,51 @@ class DWposeDetector:
             bodies = dict(candidate=body, subset=score)
             pose = dict(bodies=bodies, hands=hands, faces=faces)
 
-            return draw_pose(pose, H, W)
+            return {
+                "rgb": draw_pose(pose, H, W),
+                "dict": pose
+            }
 
 
 class DWPoseBatchInfer(object):
     def __init__(self):
         self.processor = DWposeDetector()
+        self.latest_keypoint = {
+            "version": "dwpose",
+            "people": [
+                {
+                    "person_id": [-1],
+                    "person_keypoints_2d": [],
+                    "face_keypoints_2d": [],
+                    "hand_left_keypoints_2d": [],
+                    "hand_right_keypoints_2d": [],
+                    "pose_keypoints_3d": [],
+                    "face_keypoints_3d": [],
+                    "hand_left_keypoints_3d": [],
+                    "hand_right_keypoints_3d": []
+                }
+            ]
+        }
 
-    def forward_rgb_as_rgb(self, x_arr: np.ndarray):
+    def forward_rgb_as_rgb(self, x_arr: np.ndarray) -> np.ndarray:
         assert len(x_arr.shape) == 3, "Only HWC is supported"
-        detected_map = self.processor(x_arr)
+        detected_res = self.processor(x_arr)
+        detected_map = detected_res["rgb"]
+        detected_dict = detected_res["dict"]
+        self.update_latest_keypoint_dict(detected_dict)
         return detected_map
+
+    def update_latest_keypoint_dict(self, pose: dict):
+        bodies = pose["bodies"]
+        hands = pose["hands"]
+        faces = pose["faces"]
+
+        self.latest_keypoint["people"][0]["person_keypoints_2d"] = pose["bodies"]
+        self.latest_keypoint["people"][0]["face_keypoints_2d"] = pose["hands"]
+        self.latest_keypoint["people"][0]["hand_left_keypoints_2d"] = pose["faces"]
+        self.latest_keypoint["people"][0]["hand_right_keypoints_2d"] = pose["faces"]
+
+        # no need to save POSE.yaml yet
+
+    def get_latest_keypoint_dict(self):
+        return self.latest_keypoint

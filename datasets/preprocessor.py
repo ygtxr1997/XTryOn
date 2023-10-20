@@ -14,6 +14,8 @@ from third_party import (
     DWPoseBatchInfer,
     Detectron2BatchInfer,
     GroundedSAMBatchInfer,
+    M2FPBatchInfer,
+    AgnosticGenBatchInfer,
 )
 from tools import tensor_to_rgb, crop_arr_according_bbox
 
@@ -22,14 +24,15 @@ class Processor(object):
     def __init__(self, root: str,
                  out_dir: str,
                  extract_keys: list,
-                 cloth_type: str = "hoodie",
                  is_root_standard: bool = False,
                  is_debug: bool = False,
                  specific_indices: list = None,
                  reverse_person_and_cloth: int = -1,  # -1:banned, 0:predict, 1:force
-                 negative_prompt: str = "hat",
-                 finetune_target: str = None,
-                 save_ori: bool = False,
+                 cloth_type: str = "hoodie",  # grounded_sam
+                 negative_prompt: str = "hat",  # grounded_sam
+                 finetune_target: str = None,  # grounded_sam
+                 save_ori: bool = False,  # grounded_sam
+                 save_input: bool = False,  # grounded_sam
                  dataset_person_key: str = "person",
                  dataset_cloth_key: str = "cloth",
                  ):
@@ -41,10 +44,12 @@ class Processor(object):
         self.reverse_person_and_cloth = reverse_person_and_cloth
         self.finetune_target = finetune_target
         self.save_ori = save_ori
+        self.save_input = save_input
 
         self.negative_prompt = negative_prompt
-        self.person_related_keys = ("dwpose", "densepose",)
+        self.person_related_keys = ("dwpose", "densepose", "m2fp",)
         self.cloth_related_keys = ("cloth_mask",)
+        self.parsing_related_keys = ("agnostic_gen",)
 
         max_len = 10 if is_debug else None
         if not is_root_standard:
@@ -77,6 +82,10 @@ class Processor(object):
                 extractors[model] = Detectron2BatchInfer()
             elif model == "grounded_sam":
                 extractors[model] = GroundedSAMBatchInfer()
+            elif model == "m2fp":
+                extractors[model] = M2FPBatchInfer()
+            elif model == "agnostic_gen":
+                extractors[model] = AgnosticGenBatchInfer()
             else:
                 print(f"[Warning] Not supported extractor: {model}")
 
@@ -84,10 +93,12 @@ class Processor(object):
         return self.extractors
 
     def _extract_and_save(self, in_arr_rgb: np.ndarray, idx: int, key: str):
+        if in_arr_rgb is None:
+            return None
         batch_infer = self.extractors[key]
         if key in ("dwpose", ):
             detected = batch_infer.forward_rgb_as_rgb(in_arr_rgb)
-        elif key in ("densepose", ):
+        elif key in ("densepose", "m2fp", "agnostic_gen", ):
             detected = batch_infer.forward_rgb_as_pil(in_arr_rgb)
         else:
             raise KeyError(f"Not supported extractor type: {key}")
@@ -121,7 +132,7 @@ class Processor(object):
 
     @torch.no_grad()
     def process_step(self, batch, batch_idx):
-        # if batch_idx < 509:
+        # if batch_idx < 509:  # for debug
         #     return
 
         if self.specific_indices is not None and batch_idx not in self.specific_indices:
@@ -129,8 +140,10 @@ class Processor(object):
 
         person = batch["person"]
         cloth = batch["cloth"]
+        parsing = batch.get("parsing")  # maybe None or (B,H,W)
         person_rgb = tensor_to_rgb(person)
         cloth_rgb = tensor_to_rgb(cloth)
+        parsing_rgb = tensor_to_rgb(parsing, is_segmentation=True)
 
         # 1. extract bbox and crop to (1024,768)
         if "grounded_sam" in self.extract_keys:
@@ -202,10 +215,11 @@ class Processor(object):
                 self._save_as_pil(cloth_mask, batch_idx, "cloth_mask")
 
         # 2. save input
-        if self.finetune_target == "person" or self.finetune_target is None:
-            self._save_as_pil(person_rgb, batch_idx, "person")
-        if self.finetune_target == "cloth" or self.finetune_target is None:
-            self._save_as_pil(cloth_rgb, batch_idx, "cloth")
+        if self.save_input:
+            if self.finetune_target == "person" or self.finetune_target is None:
+                self._save_as_pil(person_rgb, batch_idx, "person")
+            if self.finetune_target == "cloth" or self.finetune_target is None:
+                self._save_as_pil(cloth_rgb, batch_idx, "cloth")
 
         # 3. extract and save other features
         for key in self.extractors.keys():
@@ -213,6 +227,8 @@ class Processor(object):
                 self._extract_and_save(person_rgb, batch_idx, key)
             elif key in self.cloth_related_keys:
                 self._extract_and_save(cloth_rgb, batch_idx, key)
+            elif key in self.parsing_related_keys:
+                self._extract_and_save(parsing_rgb, batch_idx, key)
             else:
                 continue
 

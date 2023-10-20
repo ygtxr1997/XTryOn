@@ -12,22 +12,29 @@ def tensor_to_rgb(x: torch.Tensor,
                   out_batch_idx: int = 0,
                   out_as_pil: bool = False,
                   out_as_binary_mask: bool = False,
+                  is_segmentation: bool = False,
                   is_zero_center: bool = True,
-                  ) -> Union[List, np.ndarray]:
+                  ) -> Union[List, np.ndarray, None]:
+    if x is None:
+        return None
+
     ndim = x.ndim
     b = x.shape[0]
     if ndim == 4:  # (B,C,H,W), e.g. image
         x = rearrange(x, "b c h w -> b h w c").contiguous()
-    elif ndim == 3:  # (B,H,W), e.g. mask
+    elif ndim == 3:  # (B,H,W), e.g. mask, segmentation
         x = x.unsqueeze(-1)
         x = torch.cat([x, x, x], dim=-1)  # (B,H,W,3)
 
     img = x.detach().cpu().float().numpy().astype(np.float32)  # (B,H,W,3)
 
-    if is_zero_center:
-        img = (img + 1.) * 127.5
-    else:
-        img = img * 255.
+    if not is_segmentation:  # in [0,1] or [-1,1]
+        if is_zero_center:
+            img = (img + 1.) * 127.5
+        else:
+            img = img * 255.
+    else:  # in {0,...,#num_classes}
+        img = img
 
     if out_as_binary_mask:  # from [0,255] to {0,1}
         img[img >= 128] = 255
@@ -40,9 +47,9 @@ def tensor_to_rgb(x: torch.Tensor,
             out_x = Image.fromarray(out_x)
         return out_x
 
-    if out_batch_idx is None:
+    if out_batch_idx is None:  # all
         ret = [to_pil(img[i], out_as_pil) for i in range(b)]
-    else:
+    else:  # single
         ret = to_pil(img[out_batch_idx], out_as_pil)
 
     return ret
