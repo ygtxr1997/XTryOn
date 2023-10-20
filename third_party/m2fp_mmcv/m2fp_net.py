@@ -14,14 +14,11 @@ import numpy as np
 from easydict import EasyDict as edict
 
 from .file_utils import func_receive_dict_inputs
-from .logger import get_logger
 from .backbone import build_resnet_deeplab_backbone
 from .parsing_utils import center_to_target_size_test
 from .m2fp.m2fp_decoder import MultiScaleMaskedTransformerDecoder
 from .m2fp.m2fp_encoder import MSDeformAttnPixelDecoder
 from .outputs import OutputKeys
-
-logger = get_logger()
 
 
 class ImageList(object):
@@ -92,7 +89,7 @@ class ImageList(object):
 class M2FP(nn.Module):
 
     def __init__(self,
-                 model_dir,
+                 model_dir : str,
                  backbone=None,
                  encoder=None,
                  decoder=None,
@@ -124,6 +121,7 @@ class M2FP(nn.Module):
                 to original input size before semantic segmentation inference or after.
         """
         super(M2FP, self).__init__(**kwargs)
+        print(f'[M2FP] loading model directory from {model_dir}')
         with open(os.path.join(model_dir, "configuration.json"), "r", encoding="utf-8") as f:
             cfg = json.load(f)
         f.close()
@@ -185,7 +183,6 @@ class M2FP(nn.Module):
 
         if pretrained:
             model_path = os.path.join(model_dir, "pytorch_model.pt")
-            logger.info(f'loading model from {model_path}')
             weight = torch.load(model_path, map_location='cpu')['model']
             tgt_weight = self.state_dict()
             for name in list(weight.keys()):
@@ -201,17 +198,17 @@ class M2FP(nn.Module):
                                 mis_match = True
                                 break
                     if mis_match:
-                        logger.info(
-                            f'size mismatch for {name} '
+                        print(
+                            f'[Warning][M2FP] size mismatch for {name} '
                             f'({load_size} -> {tgt_size}), skip loading.')
                         del weight[name]
                 else:
-                    logger.info(
-                        f'{name} doesn\'t exist in current model, skip loading.'
+                    print(
+                        f'[Warning][M2FP] {name} doesn\'t exist in current model, skip loading.'
                     )
 
             self.load_state_dict(weight, strict=False)
-            logger.info('load model done')
+            print('[M2FP] load model done')
 
     def __call__(self, *args, **kwargs) -> Dict[str, Any]:
         # Adapting a model with only one dict arg, and the arg name must be input or inputs
@@ -279,98 +276,98 @@ class M2FP(nn.Module):
         batched_inputs = input['batched_inputs']
         images = input['images']
         if self.training:
-            raise NotImplementedError
-        else:
-            mask_cls_results = outputs['pred_logits']  # (B, Q, C+1)
-            mask_pred_results = outputs['pred_masks']  # (B, Q, H, W)
-            # upsample masks
-            mask_pred_results = F.interpolate(
-                mask_pred_results,
-                size=(images.tensor.shape[-2], images.tensor.shape[-1]),
-                mode='bilinear',
-                align_corners=False,
-            )
+            raise NotImplementedError("Training mode not supported yet.")
 
-            del outputs
+        mask_cls_results = outputs['pred_logits']  # (B, Q, C+1)
+        mask_pred_results = outputs['pred_masks']  # (B, Q, H, W)
+        # upsample masks
+        mask_pred_results = F.interpolate(
+            mask_pred_results,
+            size=(images.tensor.shape[-2], images.tensor.shape[-1]),
+            mode='bilinear',
+            align_corners=False,
+        )
 
-            processed_results = []
-            for mask_cls_result, mask_pred_result, input_per_image, image_size in zip(
-                    mask_cls_results, mask_pred_results, batched_inputs,
-                    images.image_sizes):
-                height = input_per_image.get('height', image_size[0])
-                width = input_per_image.get('width', image_size[1])
-                processed_results.append({})  # for each image
+        del outputs
 
-                if self.sem_seg_postprocess_before_inference:
+        processed_results = []
+        for mask_cls_result, mask_pred_result, input_per_image, image_size in zip(
+                mask_cls_results, mask_pred_results, batched_inputs,
+                images.image_sizes):
+            height = input_per_image.get('height', image_size[0])
+            width = input_per_image.get('width', image_size[1])
+            processed_results.append({})  # for each image
+
+            if self.sem_seg_postprocess_before_inference:
+                if not self.single_human:
+                    mask_pred_result = self.sem_seg_postprocess(
+                        mask_pred_result, image_size, height, width)
+                else:
+                    mask_pred_result = self.single_human_sem_seg_postprocess(
+                        mask_pred_result, image_size,
+                        input_per_image['crop_box'], height, width)
+                mask_cls_result = mask_cls_result.to(mask_pred_result)
+
+            # semantic segmentation inference
+            if self.semantic_on:
+                r = self.semantic_inference(mask_cls_result,
+                                            mask_pred_result)
+                if not self.sem_seg_postprocess_before_inference:
                     if not self.single_human:
-                        mask_pred_result = self.sem_seg_postprocess(
-                            mask_pred_result, image_size, height, width)
+                        r = self.sem_seg_postprocess(
+                            r, image_size, height, width)
                     else:
-                        mask_pred_result = self.single_human_sem_seg_postprocess(
-                            mask_pred_result, image_size,
-                            input_per_image['crop_box'], height, width)
-                    mask_cls_result = mask_cls_result.to(mask_pred_result)
+                        r = self.single_human_sem_seg_postprocess(
+                            r, image_size, input_per_image['crop_box'],
+                            height, width)
+                    processed_results[-1]['sem_seg'] = r
 
-                # semantic segmentation inference
-                if self.semantic_on:
-                    r = self.semantic_inference(mask_cls_result,
-                                                mask_pred_result)
-                    if not self.sem_seg_postprocess_before_inference:
-                        if not self.single_human:
-                            r = self.sem_seg_postprocess(
-                                r, image_size, height, width)
-                        else:
-                            r = self.single_human_sem_seg_postprocess(
-                                r, image_size, input_per_image['crop_box'],
-                                height, width)
-                        processed_results[-1]['sem_seg'] = r
+            # parsing inference
+            if self.parsing_on:
+                parsing_r = self.instance_parsing_inference(
+                    mask_cls_result, mask_pred_result)
+                processed_results[-1]['parsing'] = parsing_r
 
-                # parsing inference
-                if self.parsing_on:
-                    parsing_r = self.instance_parsing_inference(
-                        mask_cls_result, mask_pred_result)
-                    processed_results[-1]['parsing'] = parsing_r
+        results = dict(eval_result=processed_results)
 
-            results = dict(eval_result=processed_results)
+        predictions = results['eval_result'][0]
+        class_names = self.classes
+        results_dict = {
+            OutputKeys.MASKS: [],
+            OutputKeys.LABELS: [],
+            OutputKeys.SCORES: []
+        }
+        if 'sem_seg' in predictions:
+            semantic_pred = predictions['sem_seg']
+            semantic_seg = semantic_pred.argmax(dim=0).detach().cpu().numpy()
+            semantic_pred = semantic_pred.sigmoid().detach().cpu().numpy()
+            class_ids = np.unique(semantic_seg)
+            for class_id in class_ids:
+                label = class_names[class_id]
+                mask = np.array(semantic_seg == class_id, dtype=np.float64)
+                score = (mask * semantic_pred[class_id]).sum() / (
+                    mask.sum() + 1)
+                results_dict[OutputKeys.SCORES].append(score)
+                results_dict[OutputKeys.LABELS].append(label)
+                results_dict[OutputKeys.MASKS].append(mask)
+        elif 'parsing' in predictions:
+            parsing_res = predictions['parsing']
+            part_outputs = parsing_res['part_outputs']
+            human_outputs = parsing_res['human_outputs']
 
-            predictions = results['eval_result'][0]
-            class_names = self.classes
-            results_dict = {
-                OutputKeys.MASKS: [],
-                OutputKeys.LABELS: [],
-                OutputKeys.SCORES: []
-            }
-            if 'sem_seg' in predictions:
-                semantic_pred = predictions['sem_seg']
-                semantic_seg = semantic_pred.argmax(dim=0).detach().cpu().numpy()
-                semantic_pred = semantic_pred.sigmoid().detach().cpu().numpy()
-                class_ids = np.unique(semantic_seg)
-                for class_id in class_ids:
-                    label = class_names[class_id]
-                    mask = np.array(semantic_seg == class_id, dtype=np.float64)
-                    score = (mask * semantic_pred[class_id]).sum() / (
-                        mask.sum() + 1)
+            # process semantic_outputs
+            for output in part_outputs + human_outputs:
+                score = output['score']
+                label = class_names[output['category_id']]
+                mask = (output['mask'] > 0).float().detach().cpu().numpy()
+                if score > score_thr:
                     results_dict[OutputKeys.SCORES].append(score)
                     results_dict[OutputKeys.LABELS].append(label)
                     results_dict[OutputKeys.MASKS].append(mask)
-            elif 'parsing' in predictions:
-                parsing_res = predictions['parsing']
-                part_outputs = parsing_res['part_outputs']
-                human_outputs = parsing_res['human_outputs']
+        else:
+            raise NotImplementedError
 
-                # process semantic_outputs
-                for output in part_outputs + human_outputs:
-                    score = output['score']
-                    label = class_names[output['category_id']]
-                    mask = (output['mask'] > 0).float().detach().cpu().numpy()
-                    if score > score_thr:
-                        results_dict[OutputKeys.SCORES].append(score)
-                        results_dict[OutputKeys.LABELS].append(label)
-                        results_dict[OutputKeys.MASKS].append(mask)
-            else:
-                raise NotImplementedError
-            
-            return results_dict
+        return results_dict
     
     @property
     def device(self):
@@ -519,6 +516,35 @@ class M2FP(nn.Module):
         category_probs /= paste_times
 
         return category_probs
+
+    def get_segment_classes(self, is_multiple: bool = True):
+        seg_class_list = [
+            "Background",   # 0
+            "Hat",          # 1
+            "Hair",         # 2
+            "Gloves",       # 3
+            "Sunglasses",   # 4
+            "UpperClothes", # 5
+            "Dress",        # 6
+            "Coat",         # 7
+            "Socks",        # 8
+            "Pants",        # 9
+            "Torso-skin",   # 10
+            "Scarf",        # 11
+            "Skirt",        # 12
+            "Face",         # 13
+            "Left-arm",     # 14
+            "Right-arm",    # 15
+            "Left-leg",     # 16
+            "Right-leg",    # 17
+            "Left-shoe",    # 18
+            "Right-shoe",   # 19
+            "Human"         # 20
+        ]
+        seg_class_dict = {}
+        for i in range(len(seg_class_list)):
+            seg_class_dict[seg_class_list[i]] = i
+        return seg_class_list, seg_class_dict
 
 
 class M2FPHead(nn.Module):
