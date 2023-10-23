@@ -5,6 +5,7 @@ import torchvision.transforms as transforms
 from PIL import Image, ImageDraw
 import json
 
+import os
 import os.path as osp
 import numpy as np
 
@@ -15,7 +16,10 @@ class CPDataset(data.Dataset):
         Modified on: https://github.com/bcmi/DCI-VTON-Virtual-Try-On/blob/main/warp/train/data/cp_dataset.py
     """
 
-    def __init__(self, dataroot, image_size=512, mode='train', semantic_nc=13):
+    def __init__(self, dataroot, image_size=512, mode='train', semantic_nc=13,
+                 is_debug: bool = False,
+                 debug_folder: str = "tmp_snapshot",
+                 ):
         super(CPDataset, self).__init__()
         # base setting
         self.root = dataroot
@@ -24,33 +28,56 @@ class CPDataset(data.Dataset):
         self.fine_height = image_size
         self.fine_width = int(image_size / 256 * 192)
         self.semantic_nc = semantic_nc
-        self.data_path = osp.join(dataroot, mode)
+        # self.data_path = osp.join(dataroot, mode)
+        self.data_path = osp.join(dataroot, "")
         self.toTensor = transforms.ToTensor()
         self.transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
+        self.key_person = "person"
+        self.key_cloth = "cloth"
+        self.key_cloth_mask = "cloth_mask"
+        self.key_pose = "dwpose"
+        self.key_densepose = "densepose"
+        self.key_parsing = "m2fp"
+        self.key_parsing_ag = "agnostic_gen"
+
         # load data list
-        im_names = []
-        c_names = []
-        with open(osp.join(dataroot, self.data_list), 'r') as f:
-            for line in f.readlines():
-                im_name, c_name = line.strip().split()
-                im_names.append(im_name)
-                c_names.append(c_name)
+        # im_names = []
+        # c_names = []
+        # with open(osp.join(dataroot, self.data_list), 'r') as f:
+        #     for line in f.readlines():
+        #         im_name, c_name = line.strip().split()
+        #         im_names.append(im_name)
+        #         c_names.append(c_name)
+        im_names = self.load_data_list()
 
         self.im_names = im_names
-        self.c_names = dict()
-        self.c_names['paired'] = im_names
-        self.c_names['unpaired'] = c_names
+        self.c_names = {
+            "paired": im_names,
+        }
+        # self.c_names['unpaired'] = c_names  # not used
+
+        self.is_debug = is_debug
+        self.debug_folder = debug_folder
+        if is_debug:
+            os.system(f"rm -r {debug_folder}")
+            os.makedirs(debug_folder)
+            print(f"[CPDataset] Debug mode, images will be saved to: {debug_folder}")
 
     def load_data_list(self):
-        pass
+        person_abs = os.path.join(self.root, "person")
+        fns = os.listdir(person_abs)
+        fns.sort()
+        return fns
 
     def name(self):
         return "CPDataset"
 
     def get_agnostic(self, im, im_parse, pose_data):
+        if pose_data is None:
+            return im
         parse_array = np.array(im_parse)
         parse_head = ((parse_array == 4).astype(np.float32) +
                       (parse_array == 13).astype(np.float32))
@@ -124,15 +151,15 @@ class CPDataset(data.Dataset):
 
     def __getitem__(self, index):
         im_name = self.im_names[index]
-        im_name = 'image/' + im_name
+        # im_name = 'image/' + im_name
         c_name = {}
         c = {}
         cm = {}
         for key in ['paired']:
             c_name[key] = self.c_names[key][index]
-            c[key] = Image.open(osp.join(self.data_path, 'cloth', c_name[key])).convert('RGB')
+            c[key] = Image.open(osp.join(self.data_path, self.key_cloth, c_name[key])).convert('RGB')
             c[key] = transforms.Resize(self.fine_width, interpolation=2)(c[key])
-            cm[key] = Image.open(osp.join(self.data_path, 'cloth-mask', c_name[key]))
+            cm[key] = Image.open(osp.join(self.data_path, self.key_cloth_mask, c_name[key])).convert('L')
             cm[key] = transforms.Resize(self.fine_width, interpolation=0)(cm[key])
 
             c[key] = self.transform(c[key])  # [-1,1]
@@ -142,12 +169,13 @@ class CPDataset(data.Dataset):
             cm[key].unsqueeze_(0)
 
         # person image
-        im_pil_big = Image.open(osp.join(self.data_path, im_name))
+        im_pil_big = Image.open(osp.join(self.data_path, self.key_person, im_name))
         im_pil = transforms.Resize(self.fine_width, interpolation=2)(im_pil_big)
         im = self.transform(im_pil)
 
         # load parsing image
-        parse_name = im_name.replace('image', 'image-parse-v3').replace('.jpg', '.png')
+        # parse_name = im_name.replace('image', 'image-parse-v3').replace('.jpg', '.png')
+        parse_name = osp.join(self.key_parsing, im_name)
         im_parse_pil_big = Image.open(osp.join(self.data_path, parse_name))
         im_parse_pil = transforms.Resize(self.fine_width, interpolation=0)(im_parse_pil_big)
         parse = torch.from_numpy(np.array(im_parse_pil)[None]).long()
@@ -184,8 +212,10 @@ class CPDataset(data.Dataset):
                 parse_onehot[0] += parse_map[label] * i
 
         # load image-parse-agnostic
+        # image_parse_agnostic = Image.open(
+        #     osp.join(self.data_path, parse_name.replace('image-parse-v3', 'image-parse-agnostic-v3.2')))
         image_parse_agnostic = Image.open(
-            osp.join(self.data_path, parse_name.replace('image-parse-v3', 'image-parse-agnostic-v3.2')))
+                osp.join(self.data_path, self.key_parsing_ag, im_name))
         image_parse_agnostic = transforms.Resize(self.fine_width, interpolation=0)(image_parse_agnostic)
         parse_agnostic = torch.from_numpy(np.array(image_parse_agnostic)[None]).long()
         image_parse_agnostic = self.transform(image_parse_agnostic.convert('RGB'))
@@ -202,47 +232,57 @@ class CPDataset(data.Dataset):
         im_c = im * pcm + (1 - pcm)
 
         # load pose points
-        pose_name = im_name.replace('image', 'openpose_img').replace('.jpg', '_rendered.png')
-        pose_map = Image.open(osp.join(self.data_path, pose_name))
+        # pose_name = im_name.replace('image', 'openpose_img').replace('.jpg', '_rendered.png')
+        # pose_map = Image.open(osp.join(self.data_path, pose_name))
+        pose_map = Image.open(osp.join(self.data_path, self.key_pose, im_name))
         pose_map = transforms.Resize(self.fine_width, interpolation=2)(pose_map)
         pose_map = self.transform(pose_map)  # [-1,1]
 
-        # pose name
-        pose_name = im_name.replace('image', 'openpose_json').replace('.jpg', '_keypoints.json')
-        with open(osp.join(self.data_path, pose_name), 'r') as f:
-            pose_label = json.load(f)
-            pose_data = pose_label['people'][0]['pose_keypoints_2d']
-            pose_data = np.array(pose_data)
-            pose_data = pose_data.reshape((-1, 3))[:, :2]
+        # pose name (json, not used)
+        # pose_name = im_name.replace('image', 'openpose_json').replace('.jpg', '_keypoints.json')
+        # with open(osp.join(self.data_path, pose_name), 'r') as f:
+        #     pose_label = json.load(f)
+        #     pose_data = pose_label['people'][0]['pose_keypoints_2d']
+        #     pose_data = np.array(pose_data)
+        #     pose_data = pose_data.reshape((-1, 3))[:, :2]
 
         # load densepose
-        densepose_name = im_name.replace('image', 'image-densepose')
-        densepose_map = Image.open(osp.join(self.data_path, densepose_name))
+        # densepose_name = im_name.replace('image', 'image-densepose')
+        # densepose_map = Image.open(osp.join(self.data_path, densepose_name))
+        densepose_map = Image.open(osp.join(self.data_path, self.key_densepose, im_name))
+        # print("P mode:", np.array(densepose_map).max())
+        densepose_map = densepose_map.convert("RGB")
+        # print("RGB mode:", np.array(densepose_map).max())
         densepose_map = transforms.Resize(self.fine_width, interpolation=2)(densepose_map)
         densepose_map = self.transform(densepose_map)  # [-1,1]
 
         # agnostic
-        agnostic = self.get_agnostic(im_pil_big, im_parse_pil_big, pose_data)
+        # agnostic = self.get_agnostic(im_pil_big, im_parse_pil_big, pose_data)
+        agnostic = self.get_agnostic(im_pil_big, im_parse_pil_big, pose_data=None)
         agnostic = transforms.Resize(self.fine_width, interpolation=2)(agnostic)
         agnostic = self.transform(agnostic)
 
-        warped_cloth_name = im_name.replace('image', 'cloth-warp')
-        warped_cloth = Image.open(osp.join(self.data_path, warped_cloth_name))
-        warped_cloth = transforms.Resize(self.fine_width, interpolation=2)(warped_cloth)
-        warped_cloth = self.transform(warped_cloth)
+        # warped_cloth_name = im_name.replace('image', 'cloth-warp')
+        # warped_cloth = Image.open(osp.join(self.data_path, warped_cloth_name))
+        # warped_cloth = transforms.Resize(self.fine_width, interpolation=2)(warped_cloth)
+        # warped_cloth = self.transform(warped_cloth)
+        #
+        # warped_cloth_mask_name = im_name.replace('image', 'cloth-warp-mask')
+        # warped_cloth_mask = Image.open(osp.join(self.data_path, warped_cloth_mask_name))
+        # warped_cloth_mask = transforms.Resize(self.fine_width, interpolation=transforms.InterpolationMode.NEAREST) \
+        #     (warped_cloth_mask)
+        # warped_cloth_mask = self.toTensor(warped_cloth_mask)
+        warped_cloth = ""
+        warped_cloth_mask = ""
 
-        warped_cloth_mask_name = im_name.replace('image', 'cloth-warp-mask')
-        warped_cloth_mask = Image.open(osp.join(self.data_path, warped_cloth_mask_name))
-        warped_cloth_mask = transforms.Resize(self.fine_width, interpolation=transforms.InterpolationMode.NEAREST) \
-            (warped_cloth_mask)
-        warped_cloth_mask = self.toTensor(warped_cloth_mask)
+        if self.is_debug:
+            to_img = transforms.ToPILImage()
+            to_img((c['paired'] + 1) / 2.0).save(osp.join(self.debug_folder, 'cloth.jpg'))
+            to_img((densepose_map + 1) / 2.0).save(osp.join(self.debug_folder, 'densepose.jpg'))
+            to_img((pose_map + 1) / 2.0).save(osp.join(self.debug_folder, 'pose.jpg'))
+            to_img((agnostic + 1) / 2.0).save(osp.join(self.debug_folder, 'agnostic.jpg'))
+            to_img((im_c + 1) / 2.0).save(osp.join(self.debug_folder, 'warped_cloth_gt.jpg'))
 
-        # to_img = transforms.ToPILImage()
-        # to_img((c['paired'] + 1) / 2.0).save('cloth.jpg')
-        # to_img((densepose_map + 1) / 2.0).save('densepose.jpg')
-        # to_img((pose_map + 1) / 2.0).save('pose.jpg')
-        # to_img((agnostic + 1) / 2.0).save('agnostic.jpg')
-        # to_img((im_c + 1) / 2.0).save('warped_cloth.jpg')
         result = {
             'c_name': c_name,  # for visualization
             'im_name': im_name,  # for visualization or ground truth
@@ -262,8 +302,8 @@ class CPDataset(data.Dataset):
             'parse_cloth': im_c,  # VGG Loss & vis
             # visualization & GT
             'image': im,  # for visualization
-            'warped_cloth': warped_cloth,
-            'warped_cloth_mask': warped_cloth_mask
+            'warped_cloth': warped_cloth,  # maybe ""
+            'warped_cloth_mask': warped_cloth_mask  # maybe ""
         }
 
         return result

@@ -92,7 +92,7 @@ for epoch in range(start_epoch, opt.niter + opt.niter_decay + 1):
         epoch_iter += 1
         save_fake = True
 
-        t_mask = torch.FloatTensor((data['label'].cpu().numpy()==7).astype(np.float))
+        t_mask = torch.FloatTensor((data['label'].cpu().numpy()==7).astype(np.float32))
         data['label'] = data['label']*(1-t_mask)+t_mask*4
         edge = data['edge']
         pre_clothes_edge = torch.FloatTensor((edge.detach().numpy() > 0.5).astype(np.int))
@@ -116,7 +116,7 @@ for epoch in range(start_epoch, opt.niter + opt.niter_decay + 1):
         preserve_region = face_img + other_clothes_img
         preserve_mask = torch.cat([face_mask, other_clothes_mask],1)
         concat = torch.cat([preserve_mask.cuda(), densepose, pose.cuda()],1)
-        arm_mask = torch.FloatTensor((data['label'].cpu().numpy()==11).astype(np.float)) + torch.FloatTensor((data['label'].cpu().numpy()==13).astype(np.float))
+        arm_mask = torch.FloatTensor((data['label'].cpu().numpy()==11).astype(np.float32)) + torch.FloatTensor((data['label'].cpu().numpy()==13).astype(np.float))
         hand_mask = torch.FloatTensor((data['densepose'].cpu().numpy()==3).astype(np.int)) + torch.FloatTensor((data['densepose'].cpu().numpy()==4).astype(np.int))
         hand_mask = arm_mask*hand_mask
         hand_img = hand_mask*real_image

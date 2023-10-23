@@ -14,6 +14,21 @@ import datetime
 
 from datasets.cp_datasets import CPDataset
 
+
+make_abs_path = lambda fn: os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), fn))
+
+
+def load_checkpoint(model, checkpoint_path):
+    if not os.path.exists(checkpoint_path):
+        print('No checkpoint!')
+        return
+    checkpoint = torch.load(checkpoint_path)
+    checkpoint_new = model.state_dict()
+    for param in checkpoint_new:
+        checkpoint_new[param] = checkpoint[param]
+    model.load_state_dict(checkpoint_new)
+
+
 opt = TrainOptions().parse()
 path = 'runs/' + opt.name
 os.makedirs(path, exist_ok=True)
@@ -46,9 +61,13 @@ dataset_size = len(train_loader)
 print('#training images = %d' % dataset_size)
 
 warp_model = AFWM(opt, 3 + opt.label_nc)
-print(warp_model)
+# print(warp_model)
 warp_model.train()
+pretrained_warp_path = make_abs_path("../../../pretrained/dci_vton/warp_viton_github.pth")
+# pretrained_warp_weight = torch.load(pretrained_warp_path, map_location="cpu")
+load_checkpoint(warp_model, pretrained_warp_path)
 warp_model.cuda()
+print(f"Load pretrained from: {pretrained_warp_path}")
 warp_model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(warp_model).to(device)
 
 if opt.isTrain and len(opt.gpu_ids) > 1:
@@ -86,7 +105,7 @@ for epoch in range(start_epoch, opt.niter + opt.niter_decay + 1):
         # input1
         c_paired = data['cloth']['paired'].cuda()
         cm_paired = data['cloth_mask']['paired']
-        cm_paired = torch.FloatTensor((cm_paired.numpy() > 0.5).astype(np.float)).cuda()
+        cm_paired = torch.FloatTensor((cm_paired.numpy() > 0.5).astype(np.float32)).cuda()
         # input2
         parse_agnostic = data['parse_agnostic'].cuda()
         densepose = data['densepose'].cuda()

@@ -10,4 +10,4 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nnodes=1 --nproc_per_node=4
     --num_gpus=4  \
     --gpu_ids=0,1,2,3  \
     --label_nc=13  \
-    --dataroot=/cfs/yuange/datasets/xss/standard/hoodie/
+    --dataroot=/cfs/yuange/datasets/xss/standard/hoodie/720_20231017_reordered_subpart
