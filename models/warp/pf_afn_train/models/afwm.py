@@ -2,8 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from options.train_options import TrainOptions
+
+from ..options.train_options import TrainOptions
 from .correlation import correlation # the custom cost volume layer
+
 opt = TrainOptions().parse()
 
 def apply_offset(offset):

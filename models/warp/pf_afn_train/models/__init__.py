@@ -1,1 +1,5 @@
-# model_init
+# inside
+
+
+# outside
+from ..  import options

@@ -1,18 +1,20 @@
 import os
+import sys
 import time
 
 import numpy as np
 import cv2
 from PIL import Image
+
 import torch
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 from einops import rearrange
 
-from models.afwm import AFWM
-from models.networks import load_checkpoint
-from options.test_options import NonCmdOptions
+from .models.afwm_test import AFWM
+from .models.networks_test import load_checkpoint
+from .options.test_options import NonCmdOptions
 
 
 make_abs_path = lambda fn: os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), fn))
@@ -31,9 +33,9 @@ class PFAFNImageInfer(object):
 
         opt = self.opt
         warp_model = AFWM(opt, 3 + opt.label_nc)
+        warp_model = warp_model.to(device)
         load_checkpoint(warp_model, opt.warp_checkpoint)
         warp_model = warp_model.eval()
-        warp_model = warp_model.to(device)
         self.warp_model = warp_model
 
         print(f"[PFAFNImageInfer] model loaded from {opt.warp_checkpoint}.")
@@ -89,11 +91,13 @@ class PFAFNImageInfer(object):
                     zero_center: bool = True,
                     norm: bool = True):
         trans = transforms.Compose([
-            transforms.Resize(out_hw),  # default:(1024,768)
-            transforms.ToTensor(),
-            transforms.Normalize(0.5, 0.5)  # to [0,1]
+            transforms.ToPILImage(),
+            transforms.Resize(out_hw),  # default:(1024,768), to (H,W,C) or (H,W)
+            # transforms.ToTensor(),
+            # transforms.Normalize(0.5, 0.5)  # to (C,H,W), in [0,1]
         ])
-        x = torch.FloatTensor(x.astype(np.uint8)).to(device=device)
+        # x = trans(x).to(device=device)
+        x = torch.FloatTensor(np.array(trans(x))).to(device=device)
         if norm:
             if zero_center:
                 x = (x / 127.5 - 1.)
@@ -165,7 +169,8 @@ class PFAFNImageInfer(object):
         @returns: {"warped_cloth":(oH,oW,3) in [0,255], "warped_mask":(oH,oW) in [0,255]}
         """
         process_hw = (self.fine_height, self.fine_width)
-        parse_ag_arr = transforms.Resize(process_hw)(parse_ag_arr)
+        process_wh = (self.fine_width, self.fine_height)
+        parse_ag_arr = cv2.resize(parse_ag_arr, dsize=process_wh, interpolation=cv2.INTER_LINEAR)
         parse_ag_tensor = self.seg_to_onehot(parse_ag_arr)  # (1,#seg_classes,H,W), in {0,1}
         denspose_tensor = self.hwc_to_bchw(densepose_arr, out_hw=process_hw)  # (1,3,H,W), in [-1,1]
         cloth_tensor = self.hwc_to_bchw(cloth_arr, out_hw=process_hw)  # (1,3,H,W), in [-1,1]

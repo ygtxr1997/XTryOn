@@ -1,4 +1,4 @@
-import OmegaConf
+import argparse
 from .base_options import BaseOptions
 
 class TestOptions(BaseOptions):
@@ -14,13 +14,14 @@ class TestOptions(BaseOptions):
 
 class NonCmdOptions(object):
     def __init__(self):
-        args = OmegaConf.create()
+        args = argparse.Namespace()
 
         args.warp_checkpoint = 'checkpoints/PFAFN/warp_model_final.pth'  # will be replaced
         args.gen_checkpoint = 'checkpoints/PFAFN/gen_model_final.pth'  # not used
         args.phase = 'test'
         args.unpaired = False
         args.fineSize = 512
+        args.lr = 0.
 
         self.args = args
 

@@ -1,7 +1,8 @@
 import argparse
 import os
-from util import util
 import torch
+
+from ..options import util
 
 class BaseOptions():
     def __init__(self):
@@ -51,7 +52,7 @@ class BaseOptions():
 
         self.initialized = True
 
-    def parse(self, save=True):
+    def parse(self, save=True, verbose=False):
         if not self.initialized:
             self.initialize()
         self.opt = self.parser.parse_args()
@@ -70,10 +71,11 @@ class BaseOptions():
 
         args = vars(self.opt)
 
-        print('------------ Options -------------')
-        for k, v in sorted(args.items()):
-            print('%s: %s' % (str(k), str(v)))
-        print('-------------- End ----------------')
+        if verbose:
+            print('------------ Options -------------')
+            for k, v in sorted(args.items()):
+                print('%s: %s' % (str(k), str(v)))
+            print('-------------- End ----------------')
 
         # save to the disk        
         expr_dir = os.path.join(self.opt.checkpoints_dir, self.opt.name)

@@ -12,7 +12,7 @@ from tensorboardX import SummaryWriter
 import cv2
 import datetime
 
-from datasets.cp_datasets import CPDataset
+from datasets.cp_datasets import CPDataset  # under XTryOn/
 
 
 make_abs_path = lambda fn: os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), fn))
