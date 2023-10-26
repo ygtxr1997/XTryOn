@@ -7,6 +7,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
+from einops import rearrange
 
 from typing import List, Tuple, Type
 
@@ -143,7 +144,9 @@ class MaskDecoder(nn.Module):
             hyper_in_list.append(self.output_hypernetworks_mlps[i](mask_tokens_out[:, i, :]))
         hyper_in = torch.stack(hyper_in_list, dim=1)
         b, c, h, w = upscaled_embedding.shape
-        masks = (hyper_in @ upscaled_embedding.view(b, c, h * w)).view(b, -1, h, w)
+        # masks = (hyper_in @ upscaled_embedding.view(b, c, h * w)).view(b, -1, h, w)
+        masks = (hyper_in @ upscaled_embedding.view(b, c, h * w))
+        masks = rearrange(masks, "b c (h w) -> b c h w", h=h, w=w).contiguous()
 
         # Generate mask quality predictions
         iou_pred = self.iou_prediction_head(iou_token_out)

@@ -74,7 +74,7 @@ class CrawledDataset(Dataset):
 
             index_prefix = fn.split("-")[0][:]
             indicator_pos = len(index_prefix) + 1
-            index_suffix = fn.split(".")[0][indicator_pos + 1:]
+            index_suffix = fn[indicator_pos + 1:]  # consider ".png" also a part of index
             index = f"{index_prefix}_{index_suffix}"
 
             indicator = fn[indicator_pos]  # "1":cloth "2":person
@@ -175,13 +175,18 @@ class StandardDataset(Dataset):
         parsings = []
         for res_abs_dir in self.resolution_abs_dirs:
             parsing_abs_folder = os.path.join(res_abs_dir, self.parsing_key)
+            if not os.path.exists(parsing_abs_folder):
+                continue
             parsing_fns = os.listdir(parsing_abs_folder)
             parsing_fns.sort()
             parsing_abs_paths = [os.path.join(parsing_abs_folder, fn) for fn in parsing_fns]
             parsings.extend(parsing_abs_paths)
         if len(parsings) == 0:
             parsings = [""] * len(self.persons)
-        assert len(parsings) == len(self.persons), "#Parsing images doesn't equal to #Person images."
+            print(f"[CrawledDataset] parsing folders not found in: {self.root}")
+        if len(parsings) != len(self.persons):
+            print("[Warning][CrawledDataset] #Parsing images doesn't equal to #Person images.")
+            parsings.extend([""] * (len(self.persons) - len(parsings)))
         return parsings
 
     def __getitem__(self, index):

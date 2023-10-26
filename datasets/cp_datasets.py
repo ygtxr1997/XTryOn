@@ -310,3 +310,59 @@ class CPDataset(data.Dataset):
 
     def __len__(self):
         return len(self.im_names)
+
+
+class CPDatasetLevel2(data.Dataset):
+    """
+        Level2: .../xss/standard/hoodie/
+        Level1: .../xss/standard/hoodie/720_20231017_reordered_subpart/
+    """
+
+    def __init__(self, level2_root,
+                 **kwargs
+                 ):
+        self.level2_root = level2_root
+        self.sub_dirs = self._get_subfolders()
+
+        self.sub_datasets = []
+        self.sub_dataset_lens = []
+        for abs_dir in self.sub_dirs:
+            sub_dataset = CPDataset(dataroot=abs_dir, **kwargs)
+            self.sub_datasets.append(sub_dataset)
+            self.sub_dataset_lens.append(len(sub_dataset))
+            print(f"[CPDatasetLevel2] loaded sub_folder from: {abs_dir}, len={len(sub_dataset)}")
+
+    def _get_subfolders(self):
+        ret = []
+        fns = os.listdir(self.level2_root)
+        fns.sort()
+        for level1_fn in fns:
+            level1_abs = os.path.join(self.level2_root, level1_fn)
+            if os.path.isdir(level1_abs):
+                ret.append(level1_abs)
+        return ret
+
+    def __getitem__(self, index):
+        self_len = self.__len__()
+        index = (index + self_len) % self_len
+
+        num_sub = len(self.sub_dataset_lens)
+        sub_dataset = self.sub_datasets[-1]
+
+        left_range = 0
+        for i in range(0, num_sub):
+            if left_range <= index < left_range + self.sub_dataset_lens[i]:
+                sub_dataset = self.sub_datasets[i]
+                break
+            left_range += self.sub_dataset_lens[i]
+        if left_range > index:
+            raise ValueError(f"[CPDatasetLevel2] Index out of range. {left_range} > {index}")
+
+        sample = sub_dataset[index - left_range]
+        return sample
+
+    def __len__(self):
+        num = 0
+        for sub_len in self.sub_dataset_lens:
+            num += sub_len
+        return num

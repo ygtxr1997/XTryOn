@@ -72,6 +72,9 @@ class Processor(object):
         self.extractors = self._get_extractors(extract_keys)
         print(f"[Processor] Dataset loaded from {root}, len={len(self.dataset)}; "
               f"Extractors loaded: {self.extractors.keys()}")
+        if specific_indices is not None:
+            print(f"[Processor] Running on: first={specific_indices[0]}, "
+                  f"last={specific_indices[-1]}, len={len(specific_indices)}")
 
     def _get_extractors(self, model_names: list):
         extractors = {}
@@ -199,12 +202,26 @@ class Processor(object):
 
             if len(person_sam_post_dict["images_crop"]) > 1:
                 print(f"[Warning][{batch_idx}] More than one bbox detected, but use the one with highest score.")
-            elif len(person_sam_post_dict["images_crop"]) == 0:
-                print(f"[Warning][{batch_idx}] None bbox detected in Person, use the one with person type.")
+            elif len(person_sam_post_dict["images_crop"]) == 0:  # none detected, use 'person' prompt, go 2nd try
+                print(f"[Warning][{batch_idx}] None bbox detected in Person @ 1st try, use the one with person type.")
+                person_sam_dict = sam_extractor.forward_rgb_as_dict(person_rgb, human_or_cloth_prompt)
                 person_sam_post_dict = sam_extractor.post_crop_according_prompt(person_rgb, person_sam_dict, human_or_cloth_prompt)
+                if len(person_sam_post_dict["images_crop"]) == 0:  # still none detected, use 'cloth' prompt, go 3rd try
+                    print(f"[Warning][{batch_idx}] Still none bbox detected in Person @ 2nd try, use the cloth prompt.")
+                    person_sam_dict = sam_extractor.forward_rgb_as_dict(person_rgb, "cloth")
+                    person_sam_post_dict = sam_extractor.post_crop_according_prompt(person_rgb, person_sam_dict, "cloth")
+                    if len(person_sam_post_dict["images_crop"]) == 0:  # still none detected, use input
+                        print(f"[Warning][{batch_idx}] Still none bbox detected in Person @ 3rd, use the input.")
+                        person_sam_post_dict["images_crop"].append(person_rgb)
+
             elif len(cloth_sam_post_dict["images_crop"]) == 0:
-                print(f"[Warning][{batch_idx}] None bbox detected in Cloth, use the one with person type.")
+                print(f"[Warning][{batch_idx}] None bbox detected in Cloth @ 1st try, use the one with person type.")
+                cloth_sam_dict = sam_extractor.forward_rgb_as_dict(cloth_rgb, human_or_cloth_prompt)
                 cloth_sam_post_dict = sam_extractor.post_crop_according_prompt(cloth_rgb, cloth_sam_dict, human_or_cloth_prompt)
+                if len(cloth_sam_post_dict["images_crop"]) == 0:  # 2nd try, still none detected, use 'background' object
+                    print(f"[Warning][{batch_idx}] Still none bbox detected in Cloth @ 2nd try, use the cloth prompt.")
+                    cloth_sam_dict = sam_extractor.forward_rgb_as_dict(cloth_rgb, "background")
+                    cloth_sam_post_dict = sam_extractor.post_crop_according_prompt(cloth_rgb, cloth_sam_dict, "background")
 
             if self.finetune_target == "person" or self.finetune_target is None:
                 person_rgb = person_sam_post_dict["images_crop"][0]  # only choose the 1st result?

@@ -179,7 +179,7 @@ class GroundedSAMBatchInfer(object):
         """
 
         :param x_arr:
-        :param sam_dict:
+        :param sam_dict: returned by SAM
         :param prompt:
         :return: {"images_crop", "masks_crop", "boxes", "names", "logits"}
         """

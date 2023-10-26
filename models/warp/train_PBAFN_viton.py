@@ -1,7 +1,5 @@
 import time
-from options.train_options import TrainOptions
-from models.networks import VGGLoss, save_checkpoint
-from models.afwm import TVLoss, AFWM
+
 import torch.nn as nn
 import torch.nn.functional as F
 import os
@@ -12,7 +10,11 @@ from tensorboardX import SummaryWriter
 import cv2
 import datetime
 
-from datasets.cp_datasets import CPDataset  # under XTryOn/
+from pf_afn_train.options.train_options import TrainOptions
+from pf_afn_train.models.networks import VGGLoss, save_checkpoint
+from pf_afn_train.models.afwm import TVLoss, AFWM
+
+from datasets.cp_datasets import CPDataset, CPDatasetLevel2  # is under XTryOn/
 
 
 make_abs_path = lambda fn: os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), fn))
@@ -20,8 +22,7 @@ make_abs_path = lambda fn: os.path.abspath(os.path.join(os.path.dirname(os.path.
 
 def load_checkpoint(model, checkpoint_path):
     if not os.path.exists(checkpoint_path):
-        print('No checkpoint!')
-        return
+        raise FileNotFoundError('[load_checkpoint] No checkpoint!')
     checkpoint = torch.load(checkpoint_path)
     checkpoint_new = model.state_dict()
     for param in checkpoint_new:
@@ -35,7 +36,8 @@ os.makedirs(path, exist_ok=True)
 
 
 def CreateDataset(opt):
-    dataset = CPDataset(opt.dataroot, mode='train', image_size=256)
+    # dataset = CPDataset(opt.dataroot, mode='train', image_size=256)
+    dataset = CPDatasetLevel2(opt.dataroot, mode='train', image_size=256)
     # print("dataset [%s] was created" % (dataset.name()))
     # dataset.initialize(opt)
     return dataset
@@ -43,7 +45,7 @@ def CreateDataset(opt):
 
 torch.distributed.init_process_group(backend="nccl")
 
-os.makedirs('sample', exist_ok=True)
+os.makedirs('pf_afn_train/sample', exist_ok=True)
 iter_path = os.path.join(opt.checkpoints_dir, opt.name, 'iter.txt')
 
 local_rank = torch.distributed.get_rank()
@@ -63,7 +65,9 @@ print('#training images = %d' % dataset_size)
 warp_model = AFWM(opt, 3 + opt.label_nc)
 # print(warp_model)
 warp_model.train()
-pretrained_warp_path = make_abs_path("../../../pretrained/dci_vton/warp_viton_github.pth")
+pretrained_warp_path = opt.load_pretrain
+if not os.path.exists(pretrained_warp_path):
+    pretrained_warp_path = make_abs_path("../../pretrained/dci_vton/warp_viton_github.pth")
 # pretrained_warp_weight = torch.load(pretrained_warp_path, map_location="cpu")
 load_checkpoint(warp_model, pretrained_warp_path)
 warp_model.cuda()
