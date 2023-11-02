@@ -1,2 +1,2 @@
 from .warp import PFAFNImageInfer
-from .seg import Mask2FormerPL
+from .seg import Mask2FormerPL, Mask2FormerBatchInfer

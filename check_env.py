@@ -66,6 +66,7 @@ def check_palette():
 def check_gpvton_dataset():
     from tqdm import tqdm
     from tools.cvt_data import get_coco_palette
+    from tools.cvt_data import seg_to_labels_and_one_hots, label_and_one_hot_to_seg
     # dataset = GPVTONSegDataset(
     #     "/cfs/yuange/datasets/VTON-HD/",
     #     mode="train",
@@ -80,7 +81,10 @@ def check_gpvton_dataset():
     snapshot_folder = "tmp_gpvton_snapshot"
     os.makedirs(snapshot_folder, exist_ok=True)
     n = len(dataset)
-    test_list = list(range(10)) + list(range(n - 10, n))
+    n1 = dataset.len1
+    n2 = dataset.len2
+    assert n1 + n2 == n
+    test_list = list(range(0, 10)) + list(range(n1, n1 + 10)) + list(range(n - 10, n))
     for idx in tqdm(test_list):
         batch = dataset[idx]
         cloth = batch["cloth"].unsqueeze(0)  # add batch dim
@@ -92,21 +96,72 @@ def check_gpvton_dataset():
         cloth_seg_pil.putpalette(get_coco_palette())
         cloth_seg_pil.save(os.path.join(snapshot_folder, f"{idx:05d}_cloth_seg.png"))
 
+        mask_labels, class_labels = seg_to_labels_and_one_hots(cloth_seg)
+        seg_gt = label_and_one_hot_to_seg(mask_labels[0], class_labels[0])
+        seg_gt = Image.fromarray(seg_gt).convert("P")
+        seg_gt.putpalette(get_coco_palette())
+        seg_gt.save(os.path.join(snapshot_folder, f"{idx:05d}_cloth_seg_gt.png"))
 
-def check_mask2former():
+
+def check_mask2former(is_train : bool = False):
+    import datetime
     import lightning.pytorch as pl
-    m2f = Mask2FormerPL()
+    from lightning.pytorch.callbacks import ModelCheckpoint
+    from lightning.pytorch.loggers import TensorBoardLogger
     pl.seed_everything(42)
+
+    log_root = "lightning_logs/"
+    log_project = "m2f"
+    log_version = "version_12/"
+
+    m2f = Mask2FormerPL()
+    if is_train:
+        log_version = now = datetime.datetime.now().strftime("%Y_%m_%dT%H_%M_%S")
+        weight = torch.load("./pretrained/m2f/pytorch_model.pt", map_location="cpu")
+        m2f.load_state_dict(weight)
+        tensorboard_logger = TensorBoardLogger(
+            save_dir=log_root,
+            name=log_project,
+            version=log_version,
+        )
+    else:
+        # weight = torch.load("./pretrained/m2f/pytorch_model.pt", map_location="cpu")
+        # m2f.load_state_dict(weight)
+        m2f = Mask2FormerPL.load_from_checkpoint(os.path.join(log_root, log_version, "checkpoints/last.ckpt"))
+        tensorboard_logger = TensorBoardLogger(
+            save_dir=log_root,
+            name="",
+            version=log_version,
+            sub_dir="test",
+        )
+
+    checkpoint_callback = ModelCheckpoint(every_n_epochs=5, save_top_k=-1, save_last=True, verbose=True)
     trainer = pl.Trainer(
-        strategy="ddp",
-        devices="0,1,2,3,4,5,6,7",
+        # strategy="ddp",
+        devices="2,3",
         fast_dev_run=False,
         max_epochs=100,
-        check_val_every_n_epoch=20,
-
+        limit_val_batches=2,
+        limit_test_batches=2,
+        enable_checkpointing=True,
+        callbacks=[checkpoint_callback],
+        logger=tensorboard_logger,
     )
-    trainer.fit(m2f)
-    # trainer.test(m2f)
+
+    if is_train:
+        trainer.fit(m2f)
+    else:
+        trainer.test(m2f)
+
+
+def check_ckpt():
+    from tools.cvt_data import save_ckpt_as_pt
+    save_ckpt_as_pt(
+        "/cfs/yuange/code/XTryOn/lightning_logs/m2f/2023_11_02T00_51_31/checkpoints/epoch=59-step=50636.ckpt",
+        # "/cfs/yuange/code/XTryOn/pretrained/m2f/pytorch_model.bin",
+        "/cfs/yuange/code/XTryOn/pretrained/m2f/cloth_model.pt",
+        remove_prefix=True,
+    )
 
 
 if __name__ == "__main__":
@@ -116,4 +171,5 @@ if __name__ == "__main__":
     # check_distribute()
     # check_palette()
     # check_gpvton_dataset()
-    check_mask2former()
+    # check_mask2former(is_train=True)
+    check_ckpt()

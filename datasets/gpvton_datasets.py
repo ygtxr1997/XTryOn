@@ -181,7 +181,7 @@ class GPVTONSegDataset(Dataset):
 
     def __getitem__(self, index):
         cloth_pil = Image.open(self.data_dict["cloth"][index])
-        cloth_seg_pil = Image.open(self.data_dict["cloth_seg"][index]).convert("L")
+        cloth_seg_pil = Image.open(self.data_dict["cloth_seg"][index])  # If to "L", cuda error
 
         cloth_tensor, cloth_seg_tensor = self._trans_image_with_mask(cloth_pil, cloth_seg_pil)
 
@@ -244,8 +244,10 @@ class GPMergedSegDataset(Dataset):
         if 0 <= index < self.len1:
             sample = self.vton_set[index]
         else:
+            assert index < self.len1 + self.len2
             sample = self.dresscode_set[index - self.len1]
         return sample
 
     def __len__(self):
+        # return 20
         return self.len1 + self.len2

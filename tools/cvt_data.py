@@ -123,13 +123,49 @@ def seg_to_labels_and_one_hots(seg: torch.LongTensor) -> (List[torch.LongTensor]
     one_hots = []
     labels = []
     for b_idx in range(b):
-        label = torch.unique(seg).to(device)  # (k,)
+        label = torch.unique(seg[b_idx]).to(device)  # (k,), horrible bug if not using 'b_idx'
+        # if label[0] == 0:
+        #     label = label[1:]  # remove 0-background
         k = label.shape[0]
         one_hot = torch.zeros((k, h, w), dtype=torch.float32).to(device)  # (k,h,w)
-        for c in label:
-            one_hot[one_hot == c] = 1
+        for c_idx in range(k):
+            val = label[c_idx]
+            one_hot[c_idx][seg[b_idx] == val] = 1
 
         one_hots.append(one_hot)
         labels.append(label)
 
     return one_hots, labels
+
+
+def label_and_one_hot_to_seg(one_hot: torch.LongTensor, label: torch.LongTensor):
+    one_hot = one_hot.long()
+    label = label.long()
+    k, h, w = one_hot.shape
+    device = one_hot.device
+    seg = torch.zeros((h, w), dtype=label.dtype).to(device)
+    for i in range(k):
+        val = label[i]
+        seg[one_hot[i] == 1] = val
+    seg_arr = seg.cpu().numpy().astype(np.uint8)
+    return seg_arr
+
+
+def save_ckpt_as_pt(ckpt_path: str, save_pt_path: str, remove_prefix: bool = True, add_prefix: str = None):
+    weight = torch.load(ckpt_path, map_location="cpu")
+    state_dict = weight["state_dict"] if ".ckpt" in ckpt_path else weight  # ".bin"
+    if remove_prefix:
+        new_dict = {}
+        for k, v in state_dict.items():
+            new_k = k[k.find(".") + 1:]
+            new_dict[new_k] = v
+        state_dict = new_dict
+    if add_prefix is not None:
+        new_dict = {}
+        for k, v in state_dict.items():
+            new_k = f"{add_prefix}.{k}"
+            new_dict[new_k] = v
+        state_dict = new_dict
+    torch.save(state_dict, save_pt_path)
+    print(f"Save ({ckpt_path}).state_dict as ({save_pt_path})")
+    print(f"E.g. {list(state_dict.keys())[0]}")
