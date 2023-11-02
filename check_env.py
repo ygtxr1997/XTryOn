@@ -85,22 +85,29 @@ def check_gpvton_dataset():
     n2 = dataset.len2
     assert n1 + n2 == n
     test_list = list(range(0, 10)) + list(range(n1, n1 + 10)) + list(range(n - 10, n))
+
+    def save_image_and_seg(img: torch.Tensor, seg: torch.LongTensor, suffix: str = ""):
+        pil = tensor_to_rgb(img, out_as_pil=True)
+        seg_pil = tensor_to_rgb(seg, out_as_pil=True, is_segmentation=True).convert("L").convert("P")
+        pil.save(os.path.join(snapshot_folder, f"{idx:05d}_{suffix}.jpg"))
+        seg_pil.putpalette(get_coco_palette())
+        seg_pil.save(os.path.join(snapshot_folder, f"{idx:05d}_{suffix}_seg.png"))
+
+        mask_labels, class_labels = seg_to_labels_and_one_hots(seg)
+        seg_gt = label_and_one_hot_to_seg(mask_labels[0], class_labels[0])
+        seg_gt = Image.fromarray(seg_gt).convert("P")
+        seg_gt.putpalette(get_coco_palette())
+        seg_gt.save(os.path.join(snapshot_folder, f"{idx:05d}_{suffix}_seg_gt.png"))
+
     for idx in tqdm(test_list):
         batch = dataset[idx]
         cloth = batch["cloth"].unsqueeze(0)  # add batch dim
         cloth_seg = batch["cloth_seg"].unsqueeze(0)  # add batch dim
+        person = batch["person"].unsqueeze(0)  # add batch dim
+        person_seg = batch["person_seg"].unsqueeze(0)  # add batch dim
 
-        cloth_pil = tensor_to_rgb(cloth, out_as_pil=True)
-        cloth_seg_pil = tensor_to_rgb(cloth_seg, out_as_pil=True, is_segmentation=True).convert("L").convert("P")
-        cloth_pil.save(os.path.join(snapshot_folder, f"{idx:05d}_cloth.jpg"))
-        cloth_seg_pil.putpalette(get_coco_palette())
-        cloth_seg_pil.save(os.path.join(snapshot_folder, f"{idx:05d}_cloth_seg.png"))
-
-        mask_labels, class_labels = seg_to_labels_and_one_hots(cloth_seg)
-        seg_gt = label_and_one_hot_to_seg(mask_labels[0], class_labels[0])
-        seg_gt = Image.fromarray(seg_gt).convert("P")
-        seg_gt.putpalette(get_coco_palette())
-        seg_gt.save(os.path.join(snapshot_folder, f"{idx:05d}_cloth_seg_gt.png"))
+        save_image_and_seg(cloth, cloth_seg, "cloth")
+        save_image_and_seg(person, person_seg, "person")
 
 
 def check_mask2former(is_train : bool = False):
@@ -110,11 +117,15 @@ def check_mask2former(is_train : bool = False):
     from lightning.pytorch.loggers import TensorBoardLogger
     pl.seed_everything(42)
 
+    cloth_or_person = "person"
+
     log_root = "lightning_logs/"
-    log_project = "m2f"
+    log_project = f"m2f_{cloth_or_person}"
     log_version = "version_12/"
 
-    m2f = Mask2FormerPL()
+    m2f = Mask2FormerPL(cloth_or_person=cloth_or_person)
+    m2f.train_set.is_debug = True
+    m2f.test_set.is_debug = True
     if is_train:
         log_version = now = datetime.datetime.now().strftime("%Y_%m_%dT%H_%M_%S")
         weight = torch.load("./pretrained/m2f/pytorch_model.pt", map_location="cpu")
@@ -135,13 +146,20 @@ def check_mask2former(is_train : bool = False):
             sub_dir="test",
         )
 
-    checkpoint_callback = ModelCheckpoint(every_n_epochs=5, save_top_k=-1, save_last=True, verbose=True)
+    checkpoint_callback = ModelCheckpoint(
+        every_n_epochs=5,
+        save_top_k=-1,
+        save_on_train_epoch_end=True,
+        save_last=True,
+        verbose=True
+    )
     trainer = pl.Trainer(
         # strategy="ddp",
         devices="2,3",
         fast_dev_run=False,
         max_epochs=100,
         limit_val_batches=2,
+        val_check_interval=0.4,
         limit_test_batches=2,
         enable_checkpointing=True,
         callbacks=[checkpoint_callback],
@@ -171,5 +189,5 @@ if __name__ == "__main__":
     # check_distribute()
     # check_palette()
     # check_gpvton_dataset()
-    # check_mask2former(is_train=True)
-    check_ckpt()
+    check_mask2former(is_train=True)
+    # check_ckpt()

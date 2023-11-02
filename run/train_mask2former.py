@@ -1,4 +1,5 @@
 import datetime
+import argparse
 
 import torch
 import lightning.pytorch as pl
@@ -8,14 +9,15 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from models import Mask2FormerPL
 
 
-def main():
+def main(opt):
     pl.seed_everything(42)
 
     log_root = "lightning_logs/"
-    log_project = "m2f"
-    log_version = "version_12/"
+    log_project = f"m2f_{opt.person_or_cloth}"
 
-    m2f = Mask2FormerPL()
+    m2f = Mask2FormerPL(
+        cloth_or_person=opt.person_or_cloth
+    )
 
     log_version = now = datetime.datetime.now().strftime("%Y_%m_%dT%H_%M_%S")
     weight = torch.load("./pretrained/m2f/pytorch_model.pt", map_location="cpu")
@@ -47,4 +49,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    args = argparse.ArgumentParser()
+    args.add_argument("-p", "--person_or_cloth", type=str, default="cloth", help="Train on person or cloth?")
+    opts = args.parse_args()
+    main(opts)

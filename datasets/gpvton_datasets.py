@@ -182,12 +182,17 @@ class GPVTONSegDataset(Dataset):
     def __getitem__(self, index):
         cloth_pil = Image.open(self.data_dict["cloth"][index])
         cloth_seg_pil = Image.open(self.data_dict["cloth_seg"][index])  # If to "L", cuda error
+        person_pil = Image.open(self.data_dict["person"][index])
+        person_seg_pil = Image.open(self.data_dict["person_seg"][index])  # If to "L", cuda error
 
         cloth_tensor, cloth_seg_tensor = self._trans_image_with_mask(cloth_pil, cloth_seg_pil)
+        person_tensor, person_seg_tensor = self._trans_image_with_mask(person_pil, person_seg_pil)
 
         return {
             "cloth": cloth_tensor,
             "cloth_seg": cloth_seg_tensor,
+            "person": person_tensor,
+            "person_seg": person_seg_tensor,
         }
 
     def __len__(self):
@@ -229,6 +234,7 @@ class GPDressCodeSegDataset(GPVTONSegDataset):
 class GPMergedSegDataset(Dataset):
     def __init__(self, vton_root: str,
                  dresscode_root: str,
+                 is_debug: bool = False,
                  **kwargs
                  ):
         self.vton_set = GPVTONSegDataset(root=vton_root, **kwargs)
@@ -236,6 +242,8 @@ class GPMergedSegDataset(Dataset):
 
         self.len1 = len(self.vton_set)
         self.len2 = len(self.dresscode_set)
+
+        self.is_debug = is_debug
 
         print(f"[GPMergedSegDataset] loaded vton(len={self.len1}) from {vton_root}, "
               f"dresscode(len={self.len2}) from {dresscode_root}.")
@@ -249,5 +257,6 @@ class GPMergedSegDataset(Dataset):
         return sample
 
     def __len__(self):
-        # return 20
+        if self.is_debug:
+            return 40
         return self.len1 + self.len2

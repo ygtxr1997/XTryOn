@@ -12,15 +12,21 @@ from transformers import Mask2FormerConfig, Mask2FormerModel, Mask2FormerForUniv
 from datasets import GPMergedSegDataset, GPVTONSegDataset, GPDressCodeSegDataset
 from tools import seg_to_labels_and_one_hots, get_coco_palette, label_and_one_hot_to_seg
 
+
 class Mask2FormerPL(pl.LightningModule):
     def __init__(self,
                  hf_path: str = "./configs/facebook/mask2former-swin-base-coco-panoptic",
+                 cloth_or_person: str = "cloth"
                  ):
         super().__init__()
         config = Mask2FormerConfig.from_pretrained(hf_path, local_files_only=True)
         self.m2f_model = Mask2FormerForUniversalSegmentation(config=config)
         self.hf_path = hf_path
-        print(f"[Mask2FormerPL] Load model from config file: {hf_path}")
+        print(f"[Mask2FormerPL] Load model from config file: {hf_path}. "
+              f"Training on ({cloth_or_person}).")
+
+        self.cloth_or_person = cloth_or_person
+        self.image_key, self.seg_key = self._get_keys()
 
         self.train_set = GPMergedSegDataset(
             "/cfs/yuange/datasets/VTON-HD/",
@@ -34,6 +40,13 @@ class Mask2FormerPL(pl.LightningModule):
             mode="test",
             process_scale_ratio=0.5,
         )
+
+    def _get_keys(self):
+        if self.cloth_or_person == "cloth":
+            return "cloth", "cloth_seg"
+        else:
+            assert self.cloth_or_person == "person"
+            return "person", "person_seg"
 
     def train_dataloader(self):
         dataloader = DataLoader(
@@ -67,12 +80,12 @@ class Mask2FormerPL(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         with torch.no_grad():
-            cloth = batch["cloth"]
-            cloth_seg = batch["cloth_seg"]
-            mask_labels, class_labels = seg_to_labels_and_one_hots(cloth_seg)
+            image = batch[self.image_key]
+            seg = batch[self.seg_key]
+            mask_labels, class_labels = seg_to_labels_and_one_hots(seg)
 
         outputs = self.m2f_model.forward(
-            pixel_values=cloth,
+            pixel_values=image,
             pixel_mask=None,  # warning: this should be None, meaning use all pixels
             mask_labels=mask_labels,
             class_labels=class_labels
@@ -87,12 +100,12 @@ class Mask2FormerPL(pl.LightningModule):
     @rank_zero_only
     def validation_step(self, batch, batch_idx):
         with torch.no_grad():
-            cloth = batch["cloth"]
-            cloth_seg = batch["cloth_seg"]
-            mask_labels, class_labels = seg_to_labels_and_one_hots(cloth_seg)
+            image = batch[self.image_key]
+            seg = batch[self.seg_key]
+            mask_labels, class_labels = seg_to_labels_and_one_hots(seg)
 
         outputs = self.m2f_model.forward(
-            pixel_values=cloth,
+            pixel_values=image,
             pixel_mask=None,  # warning: this should be None, meaning use all pixels
             mask_labels=mask_labels,
             class_labels=class_labels
@@ -111,12 +124,12 @@ class Mask2FormerPL(pl.LightningModule):
 
     @rank_zero_only
     def test_step(self, batch, batch_idx):
-        cloth = batch["cloth"]
-        cloth_seg = batch["cloth_seg"]
-        mask_labels, class_labels = seg_to_labels_and_one_hots(cloth_seg)
+        image = batch[self.image_key]
+        seg = batch[self.seg_key]
+        mask_labels, class_labels = seg_to_labels_and_one_hots(seg)
 
         outputs = self.m2f_model.forward(
-            pixel_values=cloth,
+            pixel_values=image,
             pixel_mask=None,  # warning: this should be None, meaning use all pixels
             mask_labels=mask_labels,
             class_labels=class_labels
@@ -132,41 +145,20 @@ class Mask2FormerPL(pl.LightningModule):
         os.makedirs(save_dir, exist_ok=True)
         save_prefix = f"{self.global_step:08d}"
 
-        cloth = inputs["cloth"]
-        cloth_seg = inputs["cloth_seg"]
-        mask_labels, class_labels = seg_to_labels_and_one_hots(cloth_seg)
-        b, c, h, w = cloth.shape
+        image = inputs[self.image_key]
+        seg = inputs[self.seg_key]
+        mask_labels, class_labels = seg_to_labels_and_one_hots(seg)
+        b, c, h, w = image.shape
 
-        pre_processor = Mask2FormerImageProcessor(
-            ignore_index=0, reduce_labels=False, do_resize=False, do_rescale=False,
-            do_normalize=False)
         post_processor = Mask2FormerImageProcessor.from_json_file(
             f"{self.hf_path}/config.json"
         )
 
         from PIL import Image
-        cloth_pil = cloth.permute(0, 2, 3, 1).cpu() * 127.5 + 127.5
-        cloth_pil = cloth_pil[0].numpy().astype(np.uint8)
-        cloth_pil = Image.fromarray(cloth_pil)
-        cloth_pil.save(os.path.join(save_dir, save_prefix + "_in_cloth.png"))
-
-        # b = cloth.shape[0]
-        # cloth_list = [tensor for tensor in cloth]
-        # cloth_seg_list = [tensor for tensor in cloth_seg]
-        # inputs = pre_processor.preprocess(
-        #     cloth_list,
-        #     segmentation_maps=cloth_seg_list,
-        #     return_tensors="pt")
-        # print("processed:", inputs.keys())  # ['pixel_values', 'pixel_mask', 'mask_labels', 'class_labels']
-
-        # compare
-        # print("pixel_values", inputs["pixel_values"].max(), inputs["pixel_values"].shape, cloth.max(), cloth.shape)
-        # print("pixel_mask", inputs["pixel_mask"].max(), inputs["pixel_mask"].shape, cloth_seg.max(), cloth_seg.shape)
-        # print("mask_labels", inputs["mask_labels"][0].max(), inputs["mask_labels"][0].shape, mask_labels[0].max(),
-        #       mask_labels[0].shape)
-        # print("class_labels", inputs["class_labels"][0].max(), inputs["class_labels"][0].shape, class_labels[0].max(),
-        #       class_labels[0].shape)
-        # print("class_labels values", inputs["class_labels"], class_labels)
+        image_pil = image.permute(0, 2, 3, 1).cpu() * 127.5 + 127.5
+        image_pil = image_pil[0].numpy().astype(np.uint8)
+        image_pil = Image.fromarray(image_pil)
+        image_pil.save(os.path.join(save_dir, save_prefix + "_in_image.png"))
 
         predicted_segmentation_maps = post_processor.post_process_semantic_segmentation(
             outputs,
