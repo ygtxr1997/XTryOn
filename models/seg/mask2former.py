@@ -4,19 +4,20 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 import lightning.pytorch as pl
 from lightning_utilities.core.rank_zero import rank_zero_only
 from transformers import Mask2FormerConfig, Mask2FormerModel, Mask2FormerForUniversalSegmentation, Mask2FormerImageProcessor
 
-from datasets import GPMergedSegDataset, GPVTONSegDataset, GPDressCodeSegDataset
 from tools import seg_to_labels_and_one_hots, get_coco_palette, label_and_one_hot_to_seg
 
 
 class Mask2FormerPL(pl.LightningModule):
     def __init__(self,
                  hf_path: str = "./configs/facebook/mask2former-swin-base-coco-panoptic",
-                 cloth_or_person: str = "cloth"
+                 cloth_or_person: str = "cloth",
+                 train_set: Dataset = None,
+                 test_set: Dataset = None,
                  ):
         super().__init__()
         config = Mask2FormerConfig.from_pretrained(hf_path, local_files_only=True)
@@ -28,18 +29,8 @@ class Mask2FormerPL(pl.LightningModule):
         self.cloth_or_person = cloth_or_person
         self.image_key, self.seg_key = self._get_keys()
 
-        self.train_set = GPMergedSegDataset(
-            "/cfs/yuange/datasets/VTON-HD/",
-            "/cfs/yuange/datasets/DressCode/",
-            mode="train",
-            process_scale_ratio=0.5,
-        )
-        self.test_set = GPMergedSegDataset(
-            "/cfs/yuange/datasets/VTON-HD/",
-            "/cfs/yuange/datasets/DressCode/",
-            mode="test",
-            process_scale_ratio=0.5,
-        )
+        self.train_set = train_set
+        self.test_set = test_set
 
     def _get_keys(self):
         if self.cloth_or_person == "cloth":
@@ -170,9 +161,9 @@ class Mask2FormerPL(pl.LightningModule):
 
         seg_pil = Image.fromarray(color_segmentation_map).convert("P")
         seg_pil.putpalette(get_coco_palette())
-        seg_pil.save(os.path.join(save_dir, save_prefix + "_pred_seg.png"))
+        seg_pil.save(os.path.join(save_dir, save_prefix + "_seg_pred.png"))
 
         seg_gt = label_and_one_hot_to_seg(mask_labels[0], class_labels[0])
         seg_gt = Image.fromarray(seg_gt).convert("P")
         seg_gt.putpalette(get_coco_palette())
-        seg_gt.save(os.path.join(save_dir, save_prefix + "_gt_seg.png"))
+        seg_gt.save(os.path.join(save_dir, save_prefix + "_seg_gt.png"))

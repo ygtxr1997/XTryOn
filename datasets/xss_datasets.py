@@ -149,7 +149,7 @@ class StandardDataset(Dataset):
 
         self.max_len = max_len
 
-        print(f"[CrawledDataset] dataset loaded from: {root}")
+        print(f"[StandardDataset] dataset loaded from: {root}")
 
     def _get_paired_lists(self):
         persons = []
@@ -183,9 +183,9 @@ class StandardDataset(Dataset):
             parsings.extend(parsing_abs_paths)
         if len(parsings) == 0:
             parsings = [""] * len(self.persons)
-            print(f"[CrawledDataset] parsing folders not found in: {self.root}")
+            print(f"[StandardDataset] parsing folders not found in: {self.root}")
         if len(parsings) != len(self.persons):
-            print("[Warning][CrawledDataset] #Parsing images doesn't equal to #Person images.")
+            print("[Warning][StandardDataset] #Parsing images doesn't equal to #Person images.")
             parsings.extend([""] * (len(self.persons) - len(parsings)))
         return parsings
 
@@ -202,6 +202,8 @@ class StandardDataset(Dataset):
         c, h, w = person.shape
         ret_dict["person"] = person
         ret_dict["cloth"] = cloth
+        ret_dict["person_path"] = person_path
+        ret_dict["cloth_path"] = cloth_path
 
         if os.path.exists(parsing_path):
             parsing = Image.open(parsing_path)

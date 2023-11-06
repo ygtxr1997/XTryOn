@@ -6,6 +6,7 @@ import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
 
+from datasets import GPMergedSegDataset, GPVTONSegDataset, GPDressCodeSegDataset
 from models import Mask2FormerPL
 
 
@@ -15,8 +16,23 @@ def main(opt):
     log_root = "lightning_logs/"
     log_project = f"m2f_{opt.person_or_cloth}"
 
+    train_set = GPMergedSegDataset(
+        "/cfs/yuange/datasets/VTON-HD/",
+        "/cfs/yuange/datasets/DressCode/",
+        mode="train",
+        process_scale_ratio=0.5,
+    )
+    test_set = GPMergedSegDataset(
+        "/cfs/yuange/datasets/VTON-HD/",
+        "/cfs/yuange/datasets/DressCode/",
+        mode="test",
+        process_scale_ratio=0.5,
+    )
+
     m2f = Mask2FormerPL(
-        cloth_or_person=opt.person_or_cloth
+        cloth_or_person=opt.person_or_cloth,
+        train_set=train_set,
+        test_set=test_set,
     )
 
     log_version = now = datetime.datetime.now().strftime("%Y_%m_%dT%H_%M_%S")
@@ -31,6 +47,7 @@ def main(opt):
     checkpoint_callback = ModelCheckpoint(
         every_n_epochs=20,
         save_top_k=-1,
+        save_on_train_epoch_end=True,
         save_last=True,
         verbose=True
     )

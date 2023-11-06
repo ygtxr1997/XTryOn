@@ -207,9 +207,9 @@ class GPDressCodeSegDataset(GPVTONSegDataset):
         super().__init__(**kwargs)
 
     def _load_data(self):
-        person_key = "image"
+        person_key = "person_upper"
         cloth_key = "cloth_align"
-        person_seg_key = "parse-bytedance"
+        person_seg_key = "person_upper_parse"
         cloth_seg_key = "cloth_align_parse-bytedance"
         self.mode_root = os.path.join(self.root, self.cloth_type)
 

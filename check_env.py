@@ -1,6 +1,7 @@
 import os
 
 import numpy as np
+import tqdm
 from PIL import Image
 import cv2
 
@@ -175,11 +176,74 @@ def check_mask2former(is_train : bool = False):
 def check_ckpt():
     from tools.cvt_data import save_ckpt_as_pt
     save_ckpt_as_pt(
-        "/cfs/yuange/code/XTryOn/lightning_logs/m2f/2023_11_02T00_51_31/checkpoints/epoch=59-step=50636.ckpt",
+        "/cfs/yuange/code/XTryOn/lightning_logs/m2f_person/2023_11_03T16_09_30/checkpoints/epoch=99-step=84396.ckpt",
         # "/cfs/yuange/code/XTryOn/pretrained/m2f/pytorch_model.bin",
-        "/cfs/yuange/code/XTryOn/pretrained/m2f/cloth_model.pt",
+        "/cfs/yuange/code/XTryOn/pretrained/m2f/person_model.pt",
         remove_prefix=True,
     )
+
+
+def check_crop_upper_and_shift():
+    from tools.crop_image import calc_crop_upper_and_shift
+    from tools.cvt_data import get_coco_palette
+    from torch.utils.data import Dataset, DataLoader
+
+    test_person = "./tools/dress_code_person.png"
+    test_seg = "./tools/dress_code_person_parse.png"
+    test_out_person = "tmp_person_crop.png"
+    test_out_seg = "tmp_person_seg_crop.png"
+
+    def process_crop_and_shift(in_image_path: str, in_seg_path: str, out_image_path: str, out_seg_path: str):
+        person_pil = Image.open(in_image_path)
+        seg_pil = Image.open(in_seg_path)
+        person = np.array(person_pil).astype(np.uint8)
+        seg = np.array(seg_pil).astype(np.uint8)
+        bbox_xywh = calc_crop_upper_and_shift(person, seg, label_candidates=(5, 6, 11, 14))
+        fx, fy, fw, fh = bbox_xywh
+        final_person_pil = person_pil.crop((fx, fy, fx + fw, fy + fh))
+        final_person_pil = final_person_pil.resize(person_pil.size, resample=Image.BILINEAR)
+        final_seg_pil = seg_pil.crop((fx, fy, fx + fw, fy + fh))
+        final_seg_pil = final_seg_pil.resize(seg_pil.size, resample=Image.NEAREST)
+        final_seg_pil.putpalette(get_coco_palette())
+        final_person_pil.save(out_image_path)
+        final_seg_pil.save(out_seg_path)
+
+    process_crop_and_shift(test_person, test_seg, test_out_person, test_out_seg)
+
+    class DressCodeDataset(Dataset):
+        def __init__(self):
+            root = "/cfs/yuange/datasets/DressCode/upper"
+            person_key = "image"
+            person_seg_key = "parse-bytedance"
+            person_upper_key = "person_upper"
+            person_seg_upper_key = "person_upper_parse"
+            os.makedirs(os.path.join(root, person_upper_key), exist_ok=True)
+            os.makedirs(os.path.join(root, person_seg_upper_key), exist_ok=True)
+            fns = os.listdir(os.path.join(root, person_key))
+            fns.sort()
+            self.root = root
+            self.person_key = person_key
+            self.person_seg_key = person_seg_key
+            self.person_upper_key = person_upper_key
+            self.person_seg_upper_key = person_seg_upper_key
+            self.fns = fns
+
+        def __len__(self):
+            return len(self.fns)
+
+        def __getitem__(self, index):  # process here
+            fn = self.fns[index]
+            in_image = os.path.join(self.root, self.person_key, fn)
+            in_seg = os.path.join(self.root, self.person_seg_key, fn.replace(".jpg", ".png"))
+            out_image = os.path.join(self.root, self.person_upper_key, fn)
+            out_seg = os.path.join(self.root, self.person_seg_upper_key, fn.replace(".jpg", ".png"))
+            process_crop_and_shift(in_image, in_seg, out_image, out_seg)
+            return fn
+
+    dress_dataset = DressCodeDataset()
+    dataloader = DataLoader(dress_dataset, batch_size=1, shuffle=False, num_workers=12)
+    for idx, batch in enumerate(tqdm.tqdm(dataloader)):
+        pass
 
 
 if __name__ == "__main__":
@@ -189,5 +253,6 @@ if __name__ == "__main__":
     # check_distribute()
     # check_palette()
     # check_gpvton_dataset()
-    check_mask2former(is_train=True)
-    # check_ckpt()
+    # check_mask2former(is_train=True)
+    check_ckpt()
+    # check_crop_upper_and_shift()

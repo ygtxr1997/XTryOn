@@ -16,6 +16,7 @@ def compare_fractions_by_int(f1_h, f1_w, f2_h, f2_w):
     else:
         return 0
 
+
 def crop_arr_according_bbox(img: np.ndarray, in_bbox: np.ndarray,
                             out_h: int = 1024,
                             out_w: int = 768,
@@ -96,6 +97,54 @@ def crop_arr_according_bbox(img: np.ndarray, in_bbox: np.ndarray,
     # ret = cv2.resize(ret, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
 
     return ret
+
+
+def calc_xywh_of_mask(mask: np.ndarray, target_labels: tuple = (1,)):
+    h, w = mask.shape  # |:y, ---:x
+    min_x, min_y = w + 1, h + 1
+    max_x, max_y = 0, 0
+    height_matrix = np.tile(np.arange(h).astype(np.int32), (w, 1)).transpose()
+    width_matrix = np.tile(np.arange(w).astype(np.int32), (h, 1))
+    for label in target_labels:
+        mask_tmp = mask.copy()
+        mask_tmp[mask_tmp != label] = 0
+        mask_tmp[mask_tmp == label] = 1
+        if mask_tmp.sum() == 0:  # not found
+            continue
+        mul_h = mask_tmp * height_matrix  # much faster than for loop
+        mul_w = mask_tmp * width_matrix
+        min_x = min(min_x, mul_w[mul_w > 0].min())  # 0 is always min
+        min_y = min(min_y, mul_h[mul_h > 0].min())  # 0 is always min
+        max_x = max(max_x, mul_w.max())
+        max_y = max(max_y, mul_h.max())
+        return min_x, min_y, (max_x - min_x + 1), (max_y - min_y + 1)  # got it
+    # not found
+    print("[Warning] cannot find any label in mask.")
+    return 0, 0, w, h
+
+
+def calc_center_of_xywh(bbox: tuple):
+    x, y, w, h = bbox
+    return (x + w // 2), (y + h // 2)
+
+
+def calc_crop_upper_and_shift(image: np.ndarray, mask: np.ndarray,
+                              crop_ratio: float = 0.65,
+                              label_candidates: tuple = (1,),
+                              ):
+    h, w = image.shape[:2]
+    mask_cx, mask_cy = calc_center_of_xywh(calc_xywh_of_mask(mask, target_labels=label_candidates))
+    crop_x = int((w * (1 - crop_ratio)) / 2)
+    crop_y = 0
+    crop_w = int(w * crop_ratio)
+    crop_h = int(h * crop_ratio)
+    crop_cx, crop_cy = calc_center_of_xywh((crop_x, crop_y, crop_w, crop_h))
+
+    shift_x = mask_cx - crop_cx
+    shift_y = 0
+    final_x = np.clip(crop_x + shift_x, 0, w - crop_w)
+    final_y = crop_y + shift_y
+    return final_x, final_y, crop_w, crop_h
 
 
 if __name__ == "__main__":

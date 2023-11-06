@@ -9,13 +9,16 @@ from tqdm import tqdm
 import torch
 from torch.utils.data import DataLoader
 
-from .datasets import CrawledDataset, StandardDataset
+from .xss_datasets import CrawledDataset, StandardDataset
 from third_party import (
     DWPoseBatchInfer,
     Detectron2BatchInfer,
     GroundedSAMBatchInfer,
     M2FPBatchInfer,
     AgnosticGenBatchInfer,
+)
+from models import (
+    Mask2FormerBatchInfer,
 )
 from tools import tensor_to_rgb, crop_arr_according_bbox
 
@@ -47,8 +50,8 @@ class Processor(object):
         self.save_input = save_input
 
         self.negative_prompt = negative_prompt
-        self.person_related_keys = ("dwpose", "densepose", "m2fp",)
-        self.cloth_related_keys = ("cloth_mask",)
+        self.person_related_keys = ("dwpose", "densepose", "m2fp", "m2f_person")
+        self.cloth_related_keys = ("cloth_mask", "m2f_cloth",)
         self.parsing_related_keys = ("agnostic_gen",)
 
         max_len = 10 if is_debug else None
@@ -89,27 +92,31 @@ class Processor(object):
                 extractors[model] = M2FPBatchInfer()
             elif model == "agnostic_gen":
                 extractors[model] = AgnosticGenBatchInfer()
+            elif model == "m2f_cloth":
+                extractors[model] = Mask2FormerBatchInfer(weight_path="./pretrained/m2f/cloth_model.pt")
+            elif model == "m2f_person":
+                extractors[model] = Mask2FormerBatchInfer(weight_path="./pretrained/m2f/person_model.pt")
             else:
                 print(f"[Warning] Not supported extractor: {model}")
 
         self.extractors = extractors
         return self.extractors
 
-    def _extract_and_save(self, in_arr_rgb: np.ndarray, idx: int, key: str):
+    def _extract_and_save(self, in_arr_rgb: np.ndarray, idx: int, key: str, save_fn: str = None):
         if in_arr_rgb is None:
             return None
         batch_infer = self.extractors[key]
         if key in ("dwpose", ):
             detected = batch_infer.forward_rgb_as_rgb(in_arr_rgb)
-        elif key in ("densepose", "m2fp", "agnostic_gen", ):
+        elif key in ("densepose", "m2fp", "agnostic_gen", "m2f_cloth", "m2f_person"):
             detected = batch_infer.forward_rgb_as_pil(in_arr_rgb)
         else:
             raise KeyError(f"Not supported extractor type: {key}")
-        self._save_as_pil(detected, idx, key)
+        self._save_as_pil(detected, idx, key, save_fn)
         return detected
 
     def _save_as_pil(self, in_data: Union[torch.Tensor, np.ndarray, PIL.Image.Image],
-                     idx: int, key: str):
+                     idx: int, key: str, save_fn: str = None):
         save_dir = os.path.join(self.out_dir, key)
         os.makedirs(save_dir, exist_ok=True)
         if isinstance(in_data, np.ndarray):
@@ -120,7 +127,8 @@ class Processor(object):
             pil = in_data
         else:
             raise TypeError(f"Input type not supported: {type(in_data)}")
-        pil.save(os.path.join(save_dir, "%07d.png" % idx))
+        save_fn = "%07d.png" % idx if save_fn is None else save_fn
+        pil.save(os.path.join(save_dir, save_fn))
 
     def _get_probs_from_sam_dict(self, sam_dict: dict, person_prompt: str):
         check_names = sam_dict["names"]
@@ -231,7 +239,7 @@ class Processor(object):
                 cloth_mask = cloth_sam_post_dict["masks_crop"][0]
                 self._save_as_pil(cloth_mask, batch_idx, "cloth_mask")
 
-        # 2. save input
+        # 2. save input (for grounded_sam)
         if self.save_input:
             if self.finetune_target == "person" or self.finetune_target is None:
                 self._save_as_pil(person_rgb, batch_idx, "person")
@@ -239,13 +247,15 @@ class Processor(object):
                 self._save_as_pil(cloth_rgb, batch_idx, "cloth")
 
         # 3. extract and save other features
+        person_fn: str = batch["person_path"][0].split("/")[-1] if batch.get("person_path") is not None else None
+        cloth_fn: str = batch["cloth_path"][0].split("/")[-1] if batch.get("cloth_path") is not None else None
         for key in self.extractors.keys():
             if key in self.person_related_keys:
-                self._extract_and_save(person_rgb, batch_idx, key)
+                self._extract_and_save(person_rgb, batch_idx, key, save_fn=person_fn)
             elif key in self.cloth_related_keys:
-                self._extract_and_save(cloth_rgb, batch_idx, key)
+                self._extract_and_save(cloth_rgb, batch_idx, key, save_fn=cloth_fn)
             elif key in self.parsing_related_keys:
-                self._extract_and_save(parsing_rgb, batch_idx, key)
+                self._extract_and_save(parsing_rgb, batch_idx, key, save_fn=person_fn)
             else:
                 continue
 

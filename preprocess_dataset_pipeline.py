@@ -144,31 +144,27 @@ def main(opts):
 
     elif step == 6:
         # 6. tmp task
-        in_root = f"/cfs/yuange/datasets/xss/standard/{in_folder}"
-        out_dir = f"/cfs/yuange/datasets/xss/standard/{in_folder}"
-        task = [
-
+        cloth_types = [
+            "hoodie_0/processed/",
+            "hoodie_1/processed/",
+            "shirt_long_0/processed/",
+            "shirt_long_1/processed/",
+            "sweater_0/processed/",
+            "sweater_1/processed/",
+            "DressCode/upper/processed/"
         ]
-        if len(task) == 0:
-            task = None
+        assert cuda_device > 0
+        cloth_type = cloth_types[cuda_device - 1]
+
+        in_root = f"/cfs/zhlin/datasets/aigc/Try-On/XSS/{cloth_type}"
+        out_dir = f"/cfs/yuange/datasets/m2f/{cloth_type}"
+
         proc = Processor(
             root=in_root,
             out_dir=out_dir,
-            extract_keys=["dwpose", "densepose", "m2fp"],  # ["dwpose", "densepose", "m2fp"]
-            cloth_type=cloth_type,
-            is_root_standard=bool("non_standard" not in in_root),
+            extract_keys=["m2f_person"],
+            is_root_standard=True,
             is_debug=False,
-            specific_indices=task,
-        )
-        proc.run()
-        proc = Processor(
-            root=in_root,
-            out_dir=out_dir,
-            extract_keys=["agnostic_gen"],  # ["agnostic_gen"]
-            cloth_type=cloth_type,
-            is_root_standard=bool("non_standard" not in in_root),
-            is_debug=False,
-            specific_indices=task,
         )
         proc.run()
 
