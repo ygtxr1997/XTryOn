@@ -1,3 +1,4 @@
+import argparse
 import os
 
 import numpy as np
@@ -246,6 +247,17 @@ def check_crop_upper_and_shift():
         pass
 
 
+def check_mgd():
+    # from models.generate.mgd import mgd
+    # model = mgd()
+
+    from third_party.pidinet.image_infer import PiDiNetBatchInfer
+    test_img = Image.open("samples/hoodie_cloth.jpg").convert("RGB")
+    infer = PiDiNetBatchInfer()
+    pil = infer.forward_rgb_as_pil(np.array(test_img))
+    pil.save("tmp_pidinet.png")
+
+
 if __name__ == "__main__":
     # check_m2fp()
     # check_dwpose()
@@ -254,5 +266,6 @@ if __name__ == "__main__":
     # check_palette()
     # check_gpvton_dataset()
     # check_mask2former(is_train=True)
-    check_ckpt()
+    # check_ckpt()
     # check_crop_upper_and_shift()
+    check_mgd()
