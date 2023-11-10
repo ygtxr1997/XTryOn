@@ -101,14 +101,14 @@ class DWPoseBatchInfer(object):
         return detected_map
 
     def update_latest_keypoint_dict(self, pose: dict):
-        bodies = pose["bodies"]
-        hands = pose["hands"]
-        faces = pose["faces"]
+        bodies = pose["bodies"]  # dict["candidate"]
+        hands = pose["hands"]  # np.ndarray
+        faces = pose["faces"]  # np.ndarray
 
         self.latest_keypoint["people"][0]["person_keypoints_2d"] = pose["bodies"]
-        self.latest_keypoint["people"][0]["face_keypoints_2d"] = pose["hands"]
-        self.latest_keypoint["people"][0]["hand_left_keypoints_2d"] = pose["faces"]
-        self.latest_keypoint["people"][0]["hand_right_keypoints_2d"] = pose["faces"]
+        self.latest_keypoint["people"][0]["face_keypoints_2d"] = pose["faces"]
+        self.latest_keypoint["people"][0]["hand_left_keypoints_2d"] = pose["hands"]
+        self.latest_keypoint["people"][0]["hand_right_keypoints_2d"] = pose["hands"]
 
         # no need to save POSE.yaml yet
 
