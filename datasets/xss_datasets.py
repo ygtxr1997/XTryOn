@@ -220,6 +220,17 @@ class StandardDataset(Dataset):
         return len(self.persons)
 
 
+class ProcessedDataset(Dataset):
+    def __init__(self, root: str,
+                 level1_dirs: list,
+                 scale_height: int = 512,
+                 scale_width: int = 384,
+                 load_keys: tuple = ("person", "pose_json", "edge", "parse", "cloth_caption"),
+                 debug_len: int = None,
+                 ):
+        pass
+
+
 if __name__ == "__main__":
     from torch.utils.data import DataLoader
 

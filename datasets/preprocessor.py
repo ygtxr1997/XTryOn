@@ -1,5 +1,6 @@
 import os
 from typing import Union
+import json
 
 import cv2
 import numpy as np
@@ -16,11 +17,12 @@ from third_party import (
     GroundedSAMBatchInfer,
     M2FPBatchInfer,
     AgnosticGenBatchInfer,
+    BLIP2BatchInfer,
 )
 from models import (
     Mask2FormerBatchInfer,
 )
-from tools import tensor_to_rgb, crop_arr_according_bbox
+from tools import tensor_to_rgb, crop_arr_according_bbox, NdarrayEncoder
 
 
 class Processor(object):
@@ -51,7 +53,7 @@ class Processor(object):
 
         self.negative_prompt = negative_prompt
         self.person_related_keys = ("dwpose", "densepose", "m2fp", "m2f_person")
-        self.cloth_related_keys = ("cloth_mask", "m2f_cloth",)
+        self.cloth_related_keys = ("cloth_mask", "m2f_cloth", "blip2_cloth")
         self.parsing_related_keys = ("agnostic_gen",)
 
         max_len = 10 if is_debug else None
@@ -72,6 +74,7 @@ class Processor(object):
             drop_last=False,
         )
 
+        self.resume_datas = {}
         self.extractors = self._get_extractors(extract_keys)
         print(f"[Processor] Dataset loaded from {root}, len={len(self.dataset)}; "
               f"Extractors loaded: {self.extractors.keys()}")
@@ -82,7 +85,7 @@ class Processor(object):
     def _get_extractors(self, model_names: list):
         extractors = {}
         for model in model_names:
-            if model == "dwpose":
+            if model in ("dwpose",):
                 extractors[model] = DWPoseBatchInfer()
             elif model == "densepose":
                 extractors[model] = Detectron2BatchInfer()
@@ -96,6 +99,10 @@ class Processor(object):
                 extractors[model] = Mask2FormerBatchInfer(weight_path="./pretrained/m2f/cloth_model.pt")
             elif model == "m2f_person":
                 extractors[model] = Mask2FormerBatchInfer(weight_path="./pretrained/m2f/person_model.pt")
+            elif model == "blip2_cloth":
+                extractors[model] = BLIP2BatchInfer()
+                with open(os.path.join(self.out_dir, model + ".json"), "rw") as f:
+                    self.resume_datas[model] = json.load(f)
             else:
                 print(f"[Warning] Not supported extractor: {model}")
 
@@ -106,10 +113,19 @@ class Processor(object):
         if in_arr_rgb is None:
             return None
         batch_infer = self.extractors[key]
-        if key in ("dwpose", ):
+        save_fn_wo_ext = os.path.splitext(save_fn)[0]
+        if key in ("dwpose",):
             detected = batch_infer.forward_rgb_as_rgb(in_arr_rgb)
+            pose_dict = batch_infer.get_latest_keypoint_dict()
+            json_fn = save_fn_wo_ext + ".json"
+            self._save_as_json(pose_dict, idx, "dwpose_json", json_fn)  # another dir
         elif key in ("densepose", "m2fp", "agnostic_gen", "m2f_cloth", "m2f_person"):
             detected = batch_infer.forward_rgb_as_pil(in_arr_rgb)
+        elif key in ("blip2_cloth",):
+            detected = batch_infer.forward_rgb_as_str(in_arr_rgb)
+            self.resume_datas["blip2_cloth"][save_fn_wo_ext] = detected
+            self._save_as_json(self.resume_datas["blip2_cloth"], idx, key, "blip2_cloth.json")  # all in 1 file
+            return detected
         else:
             raise KeyError(f"Not supported extractor type: {key}")
         self._save_as_pil(detected, idx, key, save_fn)
@@ -129,6 +145,18 @@ class Processor(object):
             raise TypeError(f"Input type not supported: {type(in_data)}")
         save_fn = "%07d.png" % idx if save_fn is None else save_fn
         pil.save(os.path.join(save_dir, save_fn))
+
+    def _save_as_json(self, in_data: Union[dict],
+                      idx: int, key: str, save_fn: str = None):
+        save_dir = os.path.join(self.out_dir, key)
+        os.makedirs(save_dir, exist_ok=True)
+        if isinstance(in_data, dict):
+            json_data = in_data
+        else:
+            raise TypeError(f"Input type not supported: {type(in_data)}")
+        save_fn = "%07d.json" % idx if save_fn is None else save_fn
+        with open(os.path.join(save_dir, save_fn), 'w') as f:
+            json.dump(json_data, f, cls=NdarrayEncoder)
 
     def _get_probs_from_sam_dict(self, sam_dict: dict, person_prompt: str):
         check_names = sam_dict["names"]

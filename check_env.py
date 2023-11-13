@@ -9,13 +9,11 @@ import cv2
 import torch
 
 
-from third_party import M2FPBatchInfer, DWPoseBatchInfer
-from datasets import CPDataset, GPVTONSegDataset, GPMergedSegDataset
 from tools import add_palette, tensor_to_rgb
-from models import Mask2FormerPL
 
 
 def check_m2fp():
+    from third_party import M2FPBatchInfer, DWPoseBatchInfer
     img = np.array(Image.open("./samples/hoodie.jpg")).astype(np.uint8)
     infer = M2FPBatchInfer()
     seg_pil = infer.forward_rgb_as_pil(img)
@@ -23,6 +21,7 @@ def check_m2fp():
 
 
 def check_dwpose():
+    from third_party import M2FPBatchInfer, DWPoseBatchInfer
     img = np.array(Image.open("./samples/hoodie.jpg")).astype(np.uint8)
     infer = DWPoseBatchInfer()
     pose_arr = infer.forward_rgb_as_rgb(img)
@@ -59,16 +58,31 @@ def check_distribute():
 
 
 def check_palette():
-    add_palette("/cfs/yuange/datasets/GPVTON/VITONHD-1024/train/cloth_parse-bytedance")
-    add_palette("/cfs/yuange/datasets/GPVTON/VITONHD-1024/test/cloth_parse-bytedance")
-    add_palette("/cfs/yuange/datasets/GPVTON/VITONHD-1024/train/parse-bytedance")
-    add_palette("/cfs/yuange/datasets/GPVTON/VITONHD-1024/test/parse-bytedance")
+    # add_palette("/cfs/yuange/datasets/GPVTON/VITONHD-1024/train/cloth_parse-bytedance")
+    # add_palette("/cfs/yuange/datasets/GPVTON/VITONHD-1024/test/cloth_parse-bytedance")
+    # add_palette("/cfs/yuange/datasets/GPVTON/VITONHD-1024/train/parse-bytedance")
+    # add_palette("/cfs/yuange/datasets/GPVTON/VITONHD-1024/test/parse-bytedance")
+    from tools.cvt_data import get_coco_palette
+    img_grid = np.zeros((1000, 1000))
+    label = 0
+    for i in range(10):
+        for j in range(10):
+            img_grid[i * 100: (i + 1) * 100, j * 100: (j + 1) * 100] = label
+            label += 1
+    img_grid = Image.fromarray(img_grid.astype(np.uint8)).convert("P")
+    palette = get_coco_palette()
+    viton_img = Image.open("/cfs/yuange/datasets/xss/processed/VITON-HD/train/parse/14684_00.png")
+    viton_img = Image.fromarray(np.array(viton_img).astype(np.uint8))
+    viton_img.save("tmp_viton_gray.png")
+    img_grid.putpalette(palette)
+    img_grid.save("tmp_palette_viton.png")
 
 
 def check_gpvton_dataset():
     from tqdm import tqdm
     from tools.cvt_data import get_coco_palette
     from tools.cvt_data import seg_to_labels_and_one_hots, label_and_one_hot_to_seg
+    from datasets import CPDataset, GPVTONSegDataset, GPMergedSegDataset
     # dataset = GPVTONSegDataset(
     #     "/cfs/yuange/datasets/VTON-HD/",
     #     mode="train",
@@ -117,6 +131,7 @@ def check_mask2former(is_train : bool = False):
     import lightning.pytorch as pl
     from lightning.pytorch.callbacks import ModelCheckpoint
     from lightning.pytorch.loggers import TensorBoardLogger
+    from models import Mask2FormerPL
     pl.seed_everything(42)
 
     cloth_or_person = "person"
@@ -248,14 +263,25 @@ def check_crop_upper_and_shift():
 
 
 def check_mgd():
-    # from models.generate.mgd import mgd
-    # model = mgd()
+    # from third_party.pidinet.image_infer import PiDiNetBatchInfer
+    # test_img = Image.open("samples/hoodie_cloth.jpg").convert("RGB")
+    # infer = PiDiNetBatchInfer()
+    # pil = infer.forward_rgb_as_pil(np.array(test_img))
+    # pil.save("tmp_pidinet.png")
 
-    from third_party.pidinet.image_infer import PiDiNetBatchInfer
-    test_img = Image.open("samples/hoodie_cloth.jpg").convert("RGB")
-    infer = PiDiNetBatchInfer()
-    pil = infer.forward_rgb_as_pil(np.array(test_img))
-    pil.save("tmp_pidinet.png")
+    from models.generate.image_infer import MGDBatchInfer
+    model_img = Image.open("samples/shirt_long_person.png")
+    model_rgb = np.array(model_img)
+    mgd_infer = MGDBatchInfer()
+    mgd_infer.forward_rgb_as_pil(model_rgb)
+
+
+def check_blip2():
+    from third_party import BLIP2BatchInfer
+    infer = BLIP2BatchInfer()
+    test_rgb = np.array(Image.open("samples/shirt_long_cloth.png"))
+    out_text = infer.forward_rgb_as_str(test_rgb)
+    print(out_text)
 
 
 if __name__ == "__main__":
@@ -268,4 +294,5 @@ if __name__ == "__main__":
     # check_mask2former(is_train=True)
     # check_ckpt()
     # check_crop_upper_and_shift()
-    check_mgd()
+    # check_mgd()
+    check_blip2()

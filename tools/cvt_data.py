@@ -1,4 +1,5 @@
 import os
+import json
 from typing import Union, List
 
 import cv2
@@ -169,3 +170,41 @@ def save_ckpt_as_pt(ckpt_path: str, save_pt_path: str, remove_prefix: bool = Tru
     torch.save(state_dict, save_pt_path)
     print(f"Save ({ckpt_path}).state_dict as ({save_pt_path})")
     print(f"E.g. {list(state_dict.keys())[0]}")
+
+
+def kpoint_to_heatmap(kpoint, shape, sigma):
+    """Converts a 2D keypoint to a gaussian heatmap
+
+    Parameters
+    ----------
+    kpoint: np.ndarray
+        2D coordinates of keypoint [x, y].
+    shape: tuple
+        Heatmap dimension (HxW).
+    sigma: float
+        Variance value of the gaussian.
+
+    Returns
+    -------
+    heatmap: np.ndarray
+        A gaussian heatmap HxW.
+    """
+    map_h = shape[0]
+    map_w = shape[1]
+    if np.any(kpoint > 0):
+        x, y = kpoint
+        # x = x * map_w / 384.0
+        # y = y * map_h / 512.0
+        xy_grid = np.mgrid[:map_w, :map_h].transpose(2, 1, 0)
+        heatmap = np.exp(-np.sum((xy_grid - (x, y)) ** 2, axis=-1) / sigma ** 2)
+        heatmap /= (heatmap.max() + np.finfo('float32').eps)
+    else:
+        heatmap = np.zeros((map_h, map_w))
+    return torch.Tensor(heatmap)
+
+
+class NdarrayEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)

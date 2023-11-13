@@ -151,10 +151,10 @@ def main(opts):
             "shirt_long_1/processed/",
             "sweater_0/processed/",
             "sweater_1/processed/",
-            "DressCode/upper/processed/"
+            "DressCode/upper/processed/",
+            "VITON-HD/train/"
         ]
-        assert cuda_device > 0
-        cloth_type = cloth_types[cuda_device - 1]
+        cloth_type = cloth_types[((cuda_device + 8) - 1) % 8]
 
         in_root = f"/cfs/zhlin/datasets/aigc/Try-On/XSS/{cloth_type}"
         out_dir = f"/cfs/yuange/datasets/m2f/{cloth_type}"
@@ -162,7 +162,7 @@ def main(opts):
         proc = Processor(
             root=in_root,
             out_dir=out_dir,
-            extract_keys=["m2f_person"],
+            extract_keys=["dwpose"],
             is_root_standard=True,
             is_debug=False,
         )
