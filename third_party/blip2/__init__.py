@@ -1,1 +1,1 @@
-from .image_infer import BLIP2BatchInfer
+from .image_infer import BLIP2BatchInfer, BLIPBatchInfer

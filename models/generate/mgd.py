@@ -1,5 +1,6 @@
 import torch
 from diffusers import UNet2DConditionModel
+from diffusers import DDPMScheduler
 
 
 # mgd is the name of entrypoint
@@ -20,3 +21,7 @@ def mgd(dataset: str = "vitonhd", pretrained: bool = True) -> UNet2DConditionMod
         print(f"[mgd] model loaded from: {checkpoint}")
 
     return unet
+
+
+# ddpm_scheduler = DDPMScheduler()
+# ddpm_scheduler.add_noise()

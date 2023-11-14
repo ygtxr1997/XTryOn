@@ -277,11 +277,47 @@ def check_mgd():
 
 
 def check_blip2():
-    from third_party import BLIP2BatchInfer
-    infer = BLIP2BatchInfer()
+    from third_party import BLIP2BatchInfer, BLIPBatchInfer
+    infer1 = BLIPBatchInfer()
+    infer2 = BLIP2BatchInfer()
     test_rgb = np.array(Image.open("samples/shirt_long_cloth.png"))
-    out_text = infer.forward_rgb_as_str(test_rgb)
+
+    out_text = ""
+    for _ in tqdm.tqdm(range(100)):
+        out_text = infer1.forward_rgb_as_str(test_rgb)
     print(out_text)
+
+    for _ in tqdm.tqdm(range(100)):
+        out_text = infer2.forward_rgb_as_str(test_rgb)
+    print(out_text)
+
+
+def check_json():
+    from tools.task_tools import merge_json
+    merge_json(
+        "/cfs/yuange/datasets/m2f/DressCode/upper/processed/blip2_cloth",
+        "/cfs/yuange/datasets/m2f/DressCode/upper/processed/blip2_cloth/blip2_cloth_all.json"
+    )
+
+
+def check_processed_dataset():
+    from datasets.xss_datasets import ProcessedDataset
+    dataset = ProcessedDataset(
+        "/cfs/yuange/datasets/xss/processed/",
+        "DressCode/upper",
+        debug_len=10,
+    )
+
+    def print_item(key, val):
+        print(f"({key}):")
+        if isinstance(val, torch.Tensor):
+            print(val.shape, val.min(), val.max())
+        else:
+            print(val)
+
+    test_item = dataset[0]
+    for k, v in test_item.items():
+        print_item(k, v)
 
 
 if __name__ == "__main__":
@@ -295,4 +331,6 @@ if __name__ == "__main__":
     # check_ckpt()
     # check_crop_upper_and_shift()
     # check_mgd()
-    check_blip2()
+    # check_blip2()
+    # check_json()
+    check_processed_dataset()

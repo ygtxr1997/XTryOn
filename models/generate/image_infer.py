@@ -111,7 +111,7 @@ class MGDBatchInfer(object):
         prompts = [
             prompt,
         ]
-        """
+        """ e.g.
         flared sleeves white blouse button white mandarin collar
         the camel colored shirt is made from a cotton blend
         """

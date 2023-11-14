@@ -32,6 +32,7 @@ class Processor(object):
                  is_root_standard: bool = False,
                  is_debug: bool = False,
                  specific_indices: list = None,
+                 specific_rank: int = None,
                  reverse_person_and_cloth: int = -1,  # -1:banned, 0:predict, 1:force
                  cloth_type: str = "hoodie",  # grounded_sam
                  negative_prompt: str = "hat",  # grounded_sam
@@ -46,6 +47,7 @@ class Processor(object):
         self.extract_keys = extract_keys
         self.cloth_type = cloth_type
         self.specific_indices = specific_indices
+        self.specific_rank = specific_rank
         self.reverse_person_and_cloth = reverse_person_and_cloth
         self.finetune_target = finetune_target
         self.save_ori = save_ori
@@ -59,12 +61,15 @@ class Processor(object):
         max_len = 10 if is_debug else None
         if not is_root_standard:
             self.dataset = CrawledDataset(
-                root, max_len=max_len)
+                root, max_len=max_len,
+                specific_indices=specific_indices,
+            )
         else:
             self.dataset = StandardDataset(
                 root, max_len=max_len,
                 person_key=dataset_person_key,
                 cloth_key=dataset_cloth_key,
+                specific_indices=specific_indices,
             )
         self.dataloader = DataLoader(
             self.dataset,
@@ -73,11 +78,15 @@ class Processor(object):
             shuffle=False,
             drop_last=False,
         )
+        self.last_id = len(self.dataloader) - 1
+        if specific_indices is not None:
+            self.last_id = specific_indices[self.last_id]
 
         self.resume_datas = {}
         self.extractors = self._get_extractors(extract_keys)
         print(f"[Processor] Dataset loaded from {root}, len={len(self.dataset)}; "
-              f"Extractors loaded: {self.extractors.keys()}")
+              f"Extractors loaded: {self.extractors.keys()}; "
+              f"Last_id={self.last_id};")
         if specific_indices is not None:
             print(f"[Processor] Running on: first={specific_indices[0]}, "
                   f"last={specific_indices[-1]}, len={len(specific_indices)}")
@@ -101,34 +110,37 @@ class Processor(object):
                 extractors[model] = Mask2FormerBatchInfer(weight_path="./pretrained/m2f/person_model.pt")
             elif model == "blip2_cloth":
                 extractors[model] = BLIP2BatchInfer()
-                with open(os.path.join(self.out_dir, model + ".json"), "rw") as f:
-                    self.resume_datas[model] = json.load(f)
+                self.resume_datas["blip2_cloth"] = {}
             else:
                 print(f"[Warning] Not supported extractor: {model}")
 
         self.extractors = extractors
         return self.extractors
 
-    def _extract_and_save(self, in_arr_rgb: np.ndarray, idx: int, key: str, save_fn: str = None):
+    def _extract_and_save(self, in_arr_rgb: np.ndarray, idx: int, key: str, in_fn: str = None):
         if in_arr_rgb is None:
             return None
         batch_infer = self.extractors[key]
-        save_fn_wo_ext = os.path.splitext(save_fn)[0]
+        in_fn_wo_ext = os.path.splitext(in_fn)[0] if in_fn is not None else ""
         if key in ("dwpose",):
             detected = batch_infer.forward_rgb_as_rgb(in_arr_rgb)
             pose_dict = batch_infer.get_latest_keypoint_dict()
-            json_fn = save_fn_wo_ext + ".json"
+            json_fn = in_fn_wo_ext + ".json"
             self._save_as_json(pose_dict, idx, "dwpose_json", json_fn)  # another dir
         elif key in ("densepose", "m2fp", "agnostic_gen", "m2f_cloth", "m2f_person"):
             detected = batch_infer.forward_rgb_as_pil(in_arr_rgb)
         elif key in ("blip2_cloth",):
             detected = batch_infer.forward_rgb_as_str(in_arr_rgb)
-            self.resume_datas["blip2_cloth"][save_fn_wo_ext] = detected
-            self._save_as_json(self.resume_datas["blip2_cloth"], idx, key, "blip2_cloth.json")  # all in 1 file
+            suffix = f"_rank{self.specific_rank}" if self.specific_rank is not None else ""
+            blip_json_path = os.path.join(self.out_dir, key, f"blip2_cloth{suffix}.json")
+            self.resume_datas["blip2_cloth"][in_fn_wo_ext] = detected
+            if idx % 50 == 0 or (idx == self.last_id):  # every 50 or last
+                self._save_as_json(self.resume_datas["blip2_cloth"], idx, key,
+                                   f"blip2_cloth{suffix}.json")  # all in 1 file
             return detected
         else:
             raise KeyError(f"Not supported extractor type: {key}")
-        self._save_as_pil(detected, idx, key, save_fn)
+        self._save_as_pil(detected, idx, key, in_fn)
         return detected
 
     def _save_as_pil(self, in_data: Union[torch.Tensor, np.ndarray, PIL.Image.Image],
@@ -171,11 +183,12 @@ class Processor(object):
 
     @torch.no_grad()
     def process_step(self, batch, batch_idx):
-        # if batch_idx < 509:  # for debug
+        # if self.specific_indices is not None and batch_idx not in self.specific_indices:  # set in dataset now
         #     return
 
-        if self.specific_indices is not None and batch_idx not in self.specific_indices:
-            return
+        spec_id = batch_idx
+        if self.specific_indices[batch_idx] is not None:
+            spec_id = self.specific_indices[batch_idx]
 
         person = batch["person"]
         cloth = batch["cloth"]
@@ -206,8 +219,8 @@ class Processor(object):
                 cloth_rgb, cloth_input_prompt)
 
             # check which is the real human
-            print(batch_idx, person_sam_dict["names"], person_sam_dict["logits"])
-            print(batch_idx, cloth_sam_dict["names"], cloth_sam_dict["logits"])
+            print(spec_id, person_sam_dict["names"], person_sam_dict["logits"])
+            print(spec_id, cloth_sam_dict["names"], cloth_sam_dict["logits"])
             person_has_person, person_has_cloth = self._get_probs_from_sam_dict(person_sam_dict, human_or_cloth_prompt)
             cloth_has_person, cloth_has_cloth = self._get_probs_from_sam_dict(cloth_sam_dict, human_or_cloth_prompt)
 
@@ -222,40 +235,40 @@ class Processor(object):
                 person_ori_rgb, cloth_ori_rgb = cloth_ori_rgb, person_ori_rgb
                 person_rgb, cloth_rgb = cloth_rgb, person_rgb
                 person_sam_dict, cloth_sam_dict = cloth_sam_dict, person_sam_dict
-                print(f"[Warning][{batch_idx}] Person and Cloth image seem reversed, swapping back:",
+                print(f"[Warning][{spec_id}] Person and Cloth image seem reversed, swapping back:",
                       cloth_sam_dict["names"], cloth_sam_dict["logits"],
                       person_sam_dict["names"], person_sam_dict["logits"],
                       )
 
             # save ori
             if self.save_ori:
-                self._save_as_pil(person_ori_rgb, batch_idx, "person_ori")
-                self._save_as_pil(cloth_ori_rgb, batch_idx, "cloth_ori")
+                self._save_as_pil(person_ori_rgb, spec_id, "person_ori")
+                self._save_as_pil(cloth_ori_rgb, spec_id, "cloth_ori")
 
             # crop
             person_sam_post_dict = sam_extractor.post_crop_according_prompt(person_rgb, person_sam_dict, key_prompt)
             cloth_sam_post_dict = sam_extractor.post_crop_according_prompt(cloth_rgb, cloth_sam_dict, key_prompt)
 
             if len(person_sam_post_dict["images_crop"]) > 1:
-                print(f"[Warning][{batch_idx}] More than one bbox detected, but use the one with highest score.")
+                print(f"[Warning][{spec_id}] More than one bbox detected, but use the one with highest score.")
             elif len(person_sam_post_dict["images_crop"]) == 0:  # none detected, use 'person' prompt, go 2nd try
-                print(f"[Warning][{batch_idx}] None bbox detected in Person @ 1st try, use the one with person type.")
+                print(f"[Warning][{spec_id}] None bbox detected in Person @ 1st try, use the one with person type.")
                 person_sam_dict = sam_extractor.forward_rgb_as_dict(person_rgb, human_or_cloth_prompt)
                 person_sam_post_dict = sam_extractor.post_crop_according_prompt(person_rgb, person_sam_dict, human_or_cloth_prompt)
                 if len(person_sam_post_dict["images_crop"]) == 0:  # still none detected, use 'cloth' prompt, go 3rd try
-                    print(f"[Warning][{batch_idx}] Still none bbox detected in Person @ 2nd try, use the cloth prompt.")
+                    print(f"[Warning][{spec_id}] Still none bbox detected in Person @ 2nd try, use the cloth prompt.")
                     person_sam_dict = sam_extractor.forward_rgb_as_dict(person_rgb, "cloth")
                     person_sam_post_dict = sam_extractor.post_crop_according_prompt(person_rgb, person_sam_dict, "cloth")
                     if len(person_sam_post_dict["images_crop"]) == 0:  # still none detected, use input
-                        print(f"[Warning][{batch_idx}] Still none bbox detected in Person @ 3rd, use the input.")
+                        print(f"[Warning][{spec_id}] Still none bbox detected in Person @ 3rd, use the input.")
                         person_sam_post_dict["images_crop"].append(person_rgb)
 
             elif len(cloth_sam_post_dict["images_crop"]) == 0:
-                print(f"[Warning][{batch_idx}] None bbox detected in Cloth @ 1st try, use the one with person type.")
+                print(f"[Warning][{spec_id}] None bbox detected in Cloth @ 1st try, use the one with person type.")
                 cloth_sam_dict = sam_extractor.forward_rgb_as_dict(cloth_rgb, human_or_cloth_prompt)
                 cloth_sam_post_dict = sam_extractor.post_crop_according_prompt(cloth_rgb, cloth_sam_dict, human_or_cloth_prompt)
                 if len(cloth_sam_post_dict["images_crop"]) == 0:  # 2nd try, still none detected, use 'background' object
-                    print(f"[Warning][{batch_idx}] Still none bbox detected in Cloth @ 2nd try, use the cloth prompt.")
+                    print(f"[Warning][{spec_id}] Still none bbox detected in Cloth @ 2nd try, use the cloth prompt.")
                     cloth_sam_dict = sam_extractor.forward_rgb_as_dict(cloth_rgb, "background")
                     cloth_sam_post_dict = sam_extractor.post_crop_according_prompt(cloth_rgb, cloth_sam_dict, "background")
 
@@ -265,25 +278,25 @@ class Processor(object):
             if self.finetune_target == "cloth" or self.finetune_target is None:
                 cloth_rgb = cloth_sam_post_dict["images_crop"][0]
                 cloth_mask = cloth_sam_post_dict["masks_crop"][0]
-                self._save_as_pil(cloth_mask, batch_idx, "cloth_mask")
+                self._save_as_pil(cloth_mask, spec_id, "cloth_mask")
 
         # 2. save input (for grounded_sam)
         if self.save_input:
             if self.finetune_target == "person" or self.finetune_target is None:
-                self._save_as_pil(person_rgb, batch_idx, "person")
+                self._save_as_pil(person_rgb, spec_id, "person")
             if self.finetune_target == "cloth" or self.finetune_target is None:
-                self._save_as_pil(cloth_rgb, batch_idx, "cloth")
+                self._save_as_pil(cloth_rgb, spec_id, "cloth")
 
         # 3. extract and save other features
         person_fn: str = batch["person_path"][0].split("/")[-1] if batch.get("person_path") is not None else None
         cloth_fn: str = batch["cloth_path"][0].split("/")[-1] if batch.get("cloth_path") is not None else None
         for key in self.extractors.keys():
             if key in self.person_related_keys:
-                self._extract_and_save(person_rgb, batch_idx, key, save_fn=person_fn)
+                self._extract_and_save(person_rgb, spec_id, key, in_fn=person_fn)
             elif key in self.cloth_related_keys:
-                self._extract_and_save(cloth_rgb, batch_idx, key, save_fn=cloth_fn)
+                self._extract_and_save(cloth_rgb, spec_id, key, in_fn=cloth_fn)
             elif key in self.parsing_related_keys:
-                self._extract_and_save(parsing_rgb, batch_idx, key, save_fn=person_fn)
+                self._extract_and_save(parsing_rgb, spec_id, key, in_fn=person_fn)
             else:
                 continue
 
