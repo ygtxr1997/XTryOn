@@ -249,6 +249,7 @@ class ProcessedDataset(Dataset):
                  level1_dir: str,
                  scale_height: int = 512,
                  scale_width: int = 384,
+                 fn_list: str = "train_list.txt",
                  output_keys: tuple = ("person", "densepose", "inpaint_mask", "pose_map", "blip2_cloth", "person_fn"),
                  debug_len: int = None,
                  ):
@@ -256,9 +257,11 @@ class ProcessedDataset(Dataset):
         self.level1_dir = level1_dir
         self.scale_height = scale_height
         self.scale_width = scale_width
+        self.fn_list = fn_list
         self.output_keys = output_keys
         self.debug_len = debug_len
 
+        print(f"[ProcessedDataset] Loading dataset from: ({level1_dir}) under ({root})")
         self.input_keys = self._init_input_keys(output_keys)  # according to the dependency relationship
         self.fulllist_unopened = self._init_fulllist_from_keys(self.input_keys)  # files are opened later in getitem()
         self.len = self._check_fulllist()
@@ -295,18 +298,18 @@ class ProcessedDataset(Dataset):
                 )
                 out_item_dict["inpaint_mask"] = inpaint_mask  # (1,H,W), in [0,1]
                 out_item_dict["pose_map"] = pose_dict["map"]  # (18,H,W), in [0,1]
-            elif out_key in ("dwpose", "densepose", "m2f_person", "m2f_cloth", "parse", "cloth_mask", "edge",
+            elif out_key in ("dwpose", "densepose", "m2f_person", "m2f_cloth", "parse", "cloth_mask", "pidinet",
                              ):  # seg/parse/mask resized with "NEAREST"
                 in_val: Image.Image = in_item_dict[out_key]
                 out_val = in_val.resize((width, height), resample=Image.NEAREST)
                 if out_key in ("dwpose",):  # (3,H,W), [0,255]->[0,1]
                     out_val = torch.FloatTensor(np.array(out_val)).permute(2, 0, 1) / 255.
-                elif out_key in ("cloth_mask", "edge",):  # (H,W)->(1,H,W), [0,255]->[0,1]
+                elif out_key in ("cloth_mask", "pidinet",):  # (H,W)->(1,H,W), [0,255]->[0,1]
                     out_val = torch.FloatTensor(np.array(out_val)).unsqueeze(0) / 255.
                 elif out_key in ("densepose", "m2f_person", "m2f_cloth", "parse"):  # (H,W)->(1,H,W), do not apply norm
                     out_val = torch.LongTensor(np.array(out_val)).unsqueeze(0)
                 out_item_dict[out_key] = out_val
-            elif out_key in ("person", "cloth", "warp"
+            elif out_key in ("person", "cloth", "warped_person"
                              ):  # rgb images resized with "BILINEAR"
                 in_val: Image.Image = in_item_dict[out_key]
                 out_val = in_val.resize((width, height), resample=Image.BILINEAR)
@@ -352,7 +355,7 @@ class ProcessedDataset(Dataset):
 
         ''' load other indicated keys '''
         for key in self.input_keys:
-            if key in ("densepose", "dwpose", "m2f_person", "m2f_cloth", "parse", "warp", "edge"):  # PIL.Image
+            if key in ("densepose", "dwpose", "m2f_person", "m2f_cloth", "parse", "warped_person", "pidinet"):  # PIL.Image
                 abs_path = self.fulllist_unopened[key][index]
                 pil = Image.open(abs_path)
                 item_data: Image.Image = pil
@@ -390,14 +393,22 @@ class ProcessedDataset(Dataset):
     def _init_fulllist_from_key(self, key: str) -> list:
         level1_abs = os.path.join(self.root, self.level1_dir)
         key_abs = os.path.join(level1_abs, key)
+        fn_list_abs = os.path.join(level1_abs, self.fn_list)
         assert os.path.exists(level1_abs)
         assert os.path.exists(key_abs)
+        assert os.path.exists(fn_list_abs)
 
-        fns = os.listdir(key_abs)
-        fns.sort()
+        all_fns = os.listdir(key_abs)
+        ext = os.path.splitext(all_fns[0])[-1]
+        all_fns.sort()
+        with open(fn_list_abs, "r") as tmp_f:
+            chosen_fns = [line.strip() for line in tmp_f.readlines()]
+            chosen_fns_wo_ext = [os.path.splitext(fn)[0] for fn in chosen_fns]
+            chosen_fns_w_ext = [fn + ext for fn in chosen_fns_wo_ext]
+        fns = [fn for fn in all_fns if fn in chosen_fns_w_ext]
 
-        if key in ("person", "cloth", "cloth_mask",
-                   "dwpose", "densepose", "m2f_person", "m2f_cloth", "parse", ""
+        if key in ("person", "cloth", "cloth_mask", "warped_person",
+                   "dwpose", "densepose", "m2f_person", "m2f_cloth", "parse", "pidinet",
                    "dwpose_json",
                    ):  # jpg/png/json, read absolute file paths
             ret_list = [os.path.join(key_abs, fn) for fn in fns]
@@ -405,8 +416,8 @@ class ProcessedDataset(Dataset):
             all_json_fn = "blip2_cloth_all.json"
             with open(os.path.join(key_abs, all_json_fn), "r") as tmp_f:
                 all_dict = json.load(tmp_f)
-            all_pair_list = sorted(all_dict.items(), key=lambda s : s[0])
-            ret_list = [pair[1] for pair in all_pair_list]  # convert dict to list
+            all_pair_list = sorted(all_dict.items(), key=lambda s : s[0])  # convert dict to list
+            ret_list = [pair[1] for pair in all_pair_list if pair[0] in chosen_fns_wo_ext]
         else:
             raise KeyError(f"Not supported key: {key}")
 
@@ -419,7 +430,7 @@ class ProcessedDataset(Dataset):
                        "dwpose", "dwpose_json", "densepose", "m2f_person", "parse",
                        "cloth", "cloth_mask",
                        "m2f_cloth", "blip2_cloth",
-                       "warp", "edge",
+                       "warped_person", "pidinet",
                        ):  # no dependency
                 in_keys.append(key)
             if key in ("inpaint_mask", "pose_map",):  # has dependencies

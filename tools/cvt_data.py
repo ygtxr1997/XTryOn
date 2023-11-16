@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Union, List
+from typing import Union, List, Optional
 
 import cv2
 import tqdm
@@ -51,7 +51,7 @@ COCO_PANOPTIC_PALETTE = [(220, 20, 60), (119, 11, 32), (0, 0, 142), (0, 0, 230),
 
 
 def tensor_to_rgb(x: torch.Tensor,
-                  out_batch_idx: int = 0,
+                  out_batch_idx: Optional[int] = 0,
                   out_as_pil: bool = False,
                   out_as_binary_mask: bool = False,
                   is_segmentation: bool = False,
@@ -63,9 +63,10 @@ def tensor_to_rgb(x: torch.Tensor,
     ndim = x.ndim
     b = x.shape[0]
     if ndim == 4:  # (B,C,H,W), e.g. image
-        x = rearrange(x, "b c h w -> b h w c").contiguous()
+        x = rearrange(x, "b c h w -> b h w c").contiguous()  # (B,H,W,C)
     elif ndim == 3:  # (B,H,W), e.g. mask, segmentation
-        x = x.unsqueeze(-1)
+        x = x.unsqueeze(-1)  # (B,H,W,1)
+    if x.shape[-1] == 1:  # channels=1
         x = torch.cat([x, x, x], dim=-1)  # (B,H,W,3)
 
     img = x.detach().cpu().float().numpy().astype(np.float32)  # (B,H,W,3)

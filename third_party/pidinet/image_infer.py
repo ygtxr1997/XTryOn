@@ -39,7 +39,7 @@ class PiDiNetBatchInfer(object):
         print(f"[PiDiNetBatchInfer] model loaded from: {ckpt_path}")
 
     @torch.no_grad()
-    def forward_rgb_as_pil(self, x_arr: np.ndarray, threshold: int = 20) -> Image.Image:
+    def forward_rgb_as_pil(self, x_arr: np.ndarray, threshold: int = None) -> Image.Image:
         """ Smaller threshold -> Fewer edges """
         in_tensor = self.trans(x_arr).cuda()
         in_tensor = in_tensor.unsqueeze(0)
@@ -50,7 +50,8 @@ class PiDiNetBatchInfer(object):
 
         pil = Image.fromarray(result.cpu().numpy().astype(np.uint8))
         pil = ImageOps.invert(pil)  # 255:bg, 0:edge
-        pil = pil.point(lambda p: 255 if p > threshold else 0)
+        if threshold is not None:
+            pil = pil.point(lambda p: 255 if p > threshold else 0)
         mask = np.array(pil).astype(np.float32) / 255.  # 1:bg, 0:edge
         mask = 1 - mask  # 0:bg, 1:edge
         pil = Image.fromarray((mask * 255).astype(np.uint8))  # 0:bg, 255:edge

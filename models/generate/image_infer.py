@@ -51,7 +51,7 @@ class MGDBatchInfer(object):
                            model_rgb: np.ndarray,
                            prompt: str,
                            num_samples: int = 4,
-                           seed: float = 42,
+                           seed: int = 42,
                            ):
         height, width = self.infer_height, self.infer_width
         device = self.device

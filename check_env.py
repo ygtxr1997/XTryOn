@@ -263,17 +263,17 @@ def check_crop_upper_and_shift():
 
 
 def check_mgd():
-    # from third_party.pidinet.image_infer import PiDiNetBatchInfer
-    # test_img = Image.open("samples/hoodie_cloth.jpg").convert("RGB")
-    # infer = PiDiNetBatchInfer()
-    # pil = infer.forward_rgb_as_pil(np.array(test_img))
-    # pil.save("tmp_pidinet.png")
+    from third_party.pidinet.image_infer import PiDiNetBatchInfer
+    test_img = Image.open("samples/dresscode_warped.png").convert("RGB")
+    infer = PiDiNetBatchInfer()
+    pil = infer.forward_rgb_as_pil(np.array(test_img))
+    pil.save("tmp_pidinet.png")
 
-    from models.generate.image_infer import MGDBatchInfer
-    model_img = Image.open("samples/shirt_long_person.png")
-    model_rgb = np.array(model_img)
-    mgd_infer = MGDBatchInfer()
-    mgd_infer.forward_rgb_as_pil(model_rgb)
+    # from models.generate.image_infer import MGDBatchInfer
+    # model_img = Image.open("samples/shirt_long_person.png")
+    # model_rgb = np.array(model_img)
+    # mgd_infer = MGDBatchInfer()
+    # mgd_infer.forward_rgb_as_pil(model_rgb)
 
 
 def check_blip2():
@@ -306,6 +306,10 @@ def check_processed_dataset():
         "/cfs/yuange/datasets/xss/processed/",
         "DressCode/upper",
         debug_len=10,
+        output_keys=(
+            "person", "densepose", "inpaint_mask", "pose_map", "warped_person",
+            "pidinet", "blip2_cloth", "person_fn"
+        )
     )
 
     def print_item(key, val):
@@ -318,6 +322,41 @@ def check_processed_dataset():
     test_item = dataset[0]
     for k, v in test_item.items():
         print_item(k, v)
+
+
+def check_gen_file_list():
+    zhihui_folder = "/cfs/zhlin/projects/DCI-VTON-Virtual-Try-On/repositories/FlowStyleVTON/test/results/PBAFN_short_e2e_fs_fine_512_test/"
+    level1_dir = "VITON-HD/train/"  # VITON-HD/train/ or DressCode/upper/
+    out_fn = os.path.join("/cfs/yuange/datasets/xss/processed/", level1_dir, "train_list.txt")
+    person_dir = "warped_person"
+    cloth_dir = "warped_cloth"
+    dir_abs = os.path.join(zhihui_folder, level1_dir, person_dir)
+    fns = os.listdir(dir_abs)
+    fns.sort()
+    with open(out_fn, "w") as tmp_f:
+        tmp_f.writelines([f"{fn}\n" for fn in fns])
+    with open(out_fn, "r") as tmp_f:
+        fns = [line.strip() for line in tmp_f.readlines()]
+        print(fns)
+
+
+def check_vis_point():
+    def _vis_pose_map_as_pils(pose_map: torch.Tensor):
+        b, c, h, w = pose_map.shape
+        pose_map_arr = pose_map.cpu().numpy()
+        ret_pils = []
+        for b_idx in range(b):
+            points = pose_map_arr[b_idx]  # (C,H,W)
+            black_board = np.zeros((h, w), dtype=np.uint8)
+            for c_idx in range(c):
+                point = points[c_idx]
+                black_board[point > 0.9] = (point[point > 0.9] * 255.).astype(np.uint8)
+            ret_pils.append(Image.fromarray(black_board))
+        return ret_pils
+
+    pose_map = torch.randn((4, 18, 512, 384))
+    pils = _vis_pose_map_as_pils(pose_map)
+    print(len(pils))
 
 
 if __name__ == "__main__":
@@ -333,4 +372,6 @@ if __name__ == "__main__":
     # check_mgd()
     # check_blip2()
     # check_json()
-    check_processed_dataset()
+    # check_processed_dataset()
+    # check_gen_file_list()
+    check_vis_point()

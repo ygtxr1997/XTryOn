@@ -151,14 +151,14 @@ def main(opts):
             # "shirt_long_1/processed/",
             # "sweater_0/processed/",
             # "sweater_1/processed/",
-            "DressCode/upper/processed/",  # device:0,1,2,3
+            "DressCode/upper/",  # device:0,1,2,3
             "VITON-HD/train/",  # device:4,5,6,7
         ]
         # cloth_type = cloth_types[((cuda_device + 8) - 1) % 8]
         cloth_type = cloth_types[cuda_device // 4]
 
-        in_root = f"/cfs/zhlin/datasets/aigc/Try-On/XSS/{cloth_type}"
-        out_dir = f"/cfs/yuange/datasets/m2f/{cloth_type}"
+        in_root = f"/cfs/yuange/datasets/xss/processed/{cloth_type}"
+        out_dir = f"/cfs/yuange/datasets/xss/processed/{cloth_type}"
 
         dataset_len = len(os.listdir(os.path.join(in_root, "person"))) + 10
         task = split_tasks(list(np.arange(dataset_len)), nproc, local_rank=cuda_device)
@@ -166,11 +166,12 @@ def main(opts):
         proc = Processor(
             root=in_root,
             out_dir=out_dir,
-            extract_keys=["blip2_cloth"],
+            extract_keys=["pidinet"],
             is_root_standard=True,
             is_debug=False,
             specific_indices=task,
             specific_rank=cuda_device,
+            dataset_person_key="warped_person"
         )
         proc.run()
 

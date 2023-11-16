@@ -18,6 +18,7 @@ from third_party import (
     M2FPBatchInfer,
     AgnosticGenBatchInfer,
     BLIP2BatchInfer,
+    PiDiNetBatchInfer,
 )
 from models import (
     Mask2FormerBatchInfer,
@@ -54,7 +55,7 @@ class Processor(object):
         self.save_input = save_input
 
         self.negative_prompt = negative_prompt
-        self.person_related_keys = ("dwpose", "densepose", "m2fp", "m2f_person")
+        self.person_related_keys = ("dwpose", "densepose", "m2fp", "m2f_person", "pidinet")
         self.cloth_related_keys = ("cloth_mask", "m2f_cloth", "blip2_cloth")
         self.parsing_related_keys = ("agnostic_gen",)
 
@@ -89,7 +90,8 @@ class Processor(object):
               f"Last_id={self.last_id};")
         if specific_indices is not None:
             print(f"[Processor] Running on: first={specific_indices[0]}, "
-                  f"last={specific_indices[-1]}, len={len(specific_indices)}")
+                  f"last={self.last_id}, len={len(self.dataloader)}. "
+                  f"Input: begin={specific_indices[0]}, end={specific_indices[-1]}(maybe out of range).")
 
     def _get_extractors(self, model_names: list):
         extractors = {}
@@ -111,6 +113,8 @@ class Processor(object):
             elif model == "blip2_cloth":
                 extractors[model] = BLIP2BatchInfer()
                 self.resume_datas["blip2_cloth"] = {}
+            elif model == "pidinet":
+                extractors[model] = PiDiNetBatchInfer()
             else:
                 print(f"[Warning] Not supported extractor: {model}")
 
@@ -127,7 +131,7 @@ class Processor(object):
             pose_dict = batch_infer.get_latest_keypoint_dict()
             json_fn = in_fn_wo_ext + ".json"
             self._save_as_json(pose_dict, idx, "dwpose_json", json_fn)  # another dir
-        elif key in ("densepose", "m2fp", "agnostic_gen", "m2f_cloth", "m2f_person"):
+        elif key in ("densepose", "m2fp", "agnostic_gen", "m2f_cloth", "m2f_person", "pidinet"):
             detected = batch_infer.forward_rgb_as_pil(in_arr_rgb)
         elif key in ("blip2_cloth",):
             detected = batch_infer.forward_rgb_as_str(in_arr_rgb)
