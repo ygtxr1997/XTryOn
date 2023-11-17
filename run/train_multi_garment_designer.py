@@ -6,7 +6,7 @@ import lightning.pytorch as pl
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import TensorBoardLogger
 
-from datasets import ProcessedDataset
+from datasets import ProcessedDataset, MergedProcessedDataset
 from models import MultiGarmentDesignerPL
 
 
@@ -16,9 +16,9 @@ def main(opt):
     log_root = "lightning_logs/"
     log_project = f"mgd"
 
-    train_set = ProcessedDataset(
+    train_set = MergedProcessedDataset(
         "/cfs/yuange/datasets/xss/processed/",
-        "DressCode/upper",
+        ["DressCode/upper", "VITON-HD/train"],
         scale_height=512,
         scale_width=384,
         output_keys=(
@@ -26,12 +26,6 @@ def main(opt):
         ),
         debug_len=None,
     )
-    # test_set = ProcessedDataset(
-    #     "/cfs/yuange/datasets/xss/processed/",
-    #     "DressCode/upper",
-    #     scale_height=512,
-    #     scale_width=384,
-    # )
 
     model_pl = MultiGarmentDesignerPL(
         train_set=train_set,

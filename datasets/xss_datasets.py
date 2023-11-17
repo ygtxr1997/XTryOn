@@ -2,7 +2,7 @@ import json
 import os
 import imagesize
 import glob
-from typing import Union
+from typing import Union, List
 
 import cv2
 from PIL import Image, ImageDraw
@@ -632,6 +632,44 @@ class ProcessedDataset(Dataset):
 
         inpaint_mask = inpaint_mask.unsqueeze(0)
         return inpaint_mask   # (1,H,W), in [0,1]
+
+
+class MergedProcessedDataset(Dataset):
+    def __init__(self,
+                 root: str,
+                 level1_dirs: List[str],
+                 scale_height: int = 512,
+                 scale_width: int = 384,
+                 fn_list: str = "train_list.txt",
+                 output_keys: tuple = ("person", "densepose", "inpaint_mask", "pose_map", "blip2_cloth", "person_fn"),
+                 debug_len: int = None,
+                 ):
+        self.datasets = []
+        self.len = 0
+        self.lens = []
+        self.lens_sum_suffix = []
+        for level1_dir in level1_dirs:
+            subset = ProcessedDataset(
+                root, level1_dir,
+                scale_height, scale_width, fn_list, output_keys, debug_len
+            )
+            self.datasets.append(subset)
+            self.len = self.len + len(subset)
+            self.lens.append(len(subset))
+            self.lens_sum_suffix.append(self.len)
+        print(f"[MergedProcessedDataset] loaded from: ({level1_dirs}), lens={self.lens}, sum_len={self.len}")
+
+    def __len__(self):
+        return self.len
+
+    def __getitem__(self, index):
+        left = 0
+        for subset_idx in range(len(self.datasets)):
+            if left <= index < self.lens_sum_suffix[subset_idx]:  # found
+                rel_index = index - left
+                return self.datasets[subset_idx].__getitem__(rel_index)
+            left = self.lens_sum_suffix[subset_idx]
+        return None  # not found
 
 
 

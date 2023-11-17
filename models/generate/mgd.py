@@ -138,6 +138,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
     def __init__(self,
                  train_set: Dataset = None,
                  seed: int = 42,
+                 drop_prompt: float = 0.2,
                  noise_offset: float = 0.,  # recommended 0.1
                  input_perturbation: float = 0.,  # recommended 0.1
                  snr_gamma: float = None,  # recommended 5.0
@@ -163,6 +164,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         self.val_set = train_set
 
         ''' training params '''
+        self.drop_prompt = drop_prompt
         self.noise_offset = noise_offset
         self.input_perturbation = input_perturbation
         self.snr_gamma = snr_gamma
@@ -213,8 +215,11 @@ class MultiGarmentDesignerPL(pl.LightningModule):
 
         ''' get input latents '''
         zero_mask = torch.zeros_like(inpaint_mask)
+        in_prompt = cloth_caption
+        if np.random.uniform() <= self.drop_prompt:
+            in_prompt = [""] * len(cloth_caption)
         input_latents = self._prepare_shared_latents_before_forward(
-            cloth_caption,
+            in_prompt,
             [person, person, warped_person],
             [zero_mask, inpaint_mask, zero_mask],
             pose_map, sketch, num_images_per_prompt
@@ -834,4 +839,5 @@ class MultiGarmentDesignerPL(pl.LightningModule):
 
     @staticmethod
     def _debug_print(name: str, x: torch.Tensor):
+        return  # shut down temporarily
         print(f"({name}):", x.shape, x.min(), x.max(), x.dtype)

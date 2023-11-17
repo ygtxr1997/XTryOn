@@ -304,10 +304,20 @@ def check_json():
 
 
 def check_processed_dataset():
-    from datasets.xss_datasets import ProcessedDataset
-    dataset = ProcessedDataset(
+    from datasets.xss_datasets import ProcessedDataset, MergedProcessedDataset
+    # dataset = ProcessedDataset(
+    #     "/cfs/yuange/datasets/xss/processed/",
+    #     "DressCode/upper",
+    #     debug_len=10,
+    #     output_keys=(
+    #         "person", "densepose", "inpaint_mask", "pose_map", "warped_person",
+    #         "pidinet", "blip2_cloth", "person_fn"
+    #     )
+    # )
+
+    dataset = MergedProcessedDataset(
         "/cfs/yuange/datasets/xss/processed/",
-        "DressCode/upper",
+        ["DressCode/upper", "VITON-HD/train"],
         debug_len=10,
         output_keys=(
             "person", "densepose", "inpaint_mask", "pose_map", "warped_person",
@@ -323,6 +333,10 @@ def check_processed_dataset():
             print(val)
 
     test_item = dataset[0]
+    for k, v in test_item.items():
+        print_item(k, v)
+
+    test_item = dataset[len(dataset) - 1]
     for k, v in test_item.items():
         print_item(k, v)
 
@@ -372,9 +386,9 @@ if __name__ == "__main__":
     # check_mask2former(is_train=True)
     # check_ckpt()
     # check_crop_upper_and_shift()
-    check_mgd()
+    # check_mgd()
     # check_blip2()
     # check_json()
-    # check_processed_dataset()
+    check_processed_dataset()
     # check_gen_file_list()
     # check_vis_point()
