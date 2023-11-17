@@ -24,6 +24,7 @@ def main(opt):
         output_keys=(
             "person", "inpaint_mask", "pose_map", "pidinet", "blip2_cloth", "warped_person", "person_fn",
         ),
+        debug_len=None,
     )
     # test_set = ProcessedDataset(
     #     "/cfs/yuange/datasets/xss/processed/",
@@ -47,7 +48,7 @@ def main(opt):
     )
 
     checkpoint_callback = ModelCheckpoint(
-        every_n_epochs=20,
+        every_n_epochs=10,
         save_top_k=-1,
         save_on_train_epoch_end=True,
         save_last=True,
@@ -55,10 +56,10 @@ def main(opt):
     )
     trainer = pl.Trainer(
         strategy="ddp",
-        devices="2,",
+        devices="2,3,4,5,6,7",
         fast_dev_run=False,
         max_epochs=100,
-        limit_val_batches=2,
+        limit_val_batches=1,
         val_check_interval=0.2,
         enable_checkpointing=True,
         callbacks=[checkpoint_callback],

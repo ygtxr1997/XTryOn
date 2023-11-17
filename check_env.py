@@ -263,11 +263,14 @@ def check_crop_upper_and_shift():
 
 
 def check_mgd():
-    from third_party.pidinet.image_infer import PiDiNetBatchInfer
-    test_img = Image.open("samples/dresscode_warped.png").convert("RGB")
-    infer = PiDiNetBatchInfer()
-    pil = infer.forward_rgb_as_pil(np.array(test_img))
-    pil.save("tmp_pidinet.png")
+    # from third_party.pidinet.image_infer import PiDiNetBatchInfer
+    # test_img = Image.open("samples/dresscode_warped.png").convert("RGB")
+    # infer = PiDiNetBatchInfer()
+    # pil = infer.forward_rgb_as_pil(np.array(test_img))
+    # pil.save("tmp_pidinet.png")
+
+    from models.generate.image_infer import mgd
+    model = mgd(in_channels=28 + 3)
 
     # from models.generate.image_infer import MGDBatchInfer
     # model_img = Image.open("samples/shirt_long_person.png")
@@ -369,9 +372,9 @@ if __name__ == "__main__":
     # check_mask2former(is_train=True)
     # check_ckpt()
     # check_crop_upper_and_shift()
-    # check_mgd()
+    check_mgd()
     # check_blip2()
     # check_json()
     # check_processed_dataset()
     # check_gen_file_list()
-    check_vis_point()
+    # check_vis_point()

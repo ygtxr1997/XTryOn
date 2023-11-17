@@ -3,7 +3,7 @@ from typing import Union, List
 from dataclasses import dataclass
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 
 import torch
@@ -50,7 +50,10 @@ def compute_snr(noise_scheduler, timesteps):
 
 
 # mgd is the name of entrypoint
-def mgd(dataset: str = "vitonhd", pretrained: bool = True) -> UNet2DConditionModel:
+def mgd(dataset: str = "vitonhd", pretrained: bool = True,
+        in_channels: int = 28,
+        zero_init_extra_channels: bool = True,
+        ) -> UNet2DConditionModel:
     """ # This docstring shows up in hub.help()
     MGD model
     pretrained (bool): kwargs, load pretrained weights into the model
@@ -58,12 +61,31 @@ def mgd(dataset: str = "vitonhd", pretrained: bool = True) -> UNet2DConditionMod
     config = UNet2DConditionModel.load_config(
         "configs/runwayml/stable-diffusion-inpainting",
         subfolder="unet", local_files_only=True)
-    config['in_channels'] = 28
+    config['in_channels'] = in_channels
     unet = UNet2DConditionModel.from_config(config)
 
     if pretrained:
         checkpoint = f"pretrained/mgd/{dataset}.pth"
-        unet.load_state_dict(torch.load(checkpoint, map_location="cpu"))
+        weight = torch.load(checkpoint, map_location="cpu")
+
+        if in_channels > 28:
+            weight_28channels = weight
+            weight_31channels = weight_28channels
+
+            ori_c_out, ori_c_in, ori_h, ori_w = weight_31channels["conv_in.weight"].shape
+            dtype = weight_31channels["conv_in.weight"].dtype
+            extra_shape = (ori_c_out, in_channels - ori_c_in, ori_h, ori_w)
+
+            if zero_init_extra_channels:
+                extra_kernels = torch.zeros(extra_shape, dtype=dtype)
+            else:
+                extra_kernels = torch.randn(extra_shape, dtype=dtype)
+            weight_31channels["conv_in.weight"] = torch.cat([
+                weight_28channels["conv_in.weight"],
+                extra_kernels
+            ], dim=1)  # zero_init
+
+        unet.load_state_dict(weight)
         print(f"[mgd] model loaded from: {checkpoint}")
 
     return unet
@@ -124,7 +146,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
 
         ''' mgd models '''
         sd_inpaint_dir = "pretrained/stable-diffusion-inpainting"
-        self.unet = mgd()
+        self.unet = mgd(in_channels=(28 + 4))  # 4: vae latent channels
         self.text_encoder = CLIPTextModel.from_pretrained(sd_inpaint_dir + "/text_encoder")
         self.vae = AutoencoderKL.from_pretrained(sd_inpaint_dir + "/vae")
         self.tokenizer = CLIPTokenizer.from_pretrained(sd_inpaint_dir + "/tokenizer")
@@ -206,13 +228,13 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         ''' get noisy and target '''
         num_channels_latents = self.vae.config.latent_channels
         noisy, target = self._prepare_val_noisy_before_forward(
-            batch_size, num_channels_latents, in_height, in_width, person_warped_latent.dtype,
+            batch_size, num_channels_latents, in_height, in_width, person_gt_latent.dtype,
             gt_image=person_gt_latent, timestep=timestep
         )  # target maybe None
 
         ''' forward '''
         apply_latents = torch.cat([
-            noisy, inpaint_mask_latent, person_masked_latent, pose_map, sketch
+            noisy, inpaint_mask_latent, person_masked_latent, pose_map, sketch, person_warped_latent
         ], dim=1)
         self._debug_print("apply_latents", apply_latents)
 
@@ -280,7 +302,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         # get noisy and target
         num_channels_latents = self.vae.config.latent_channels
         noisy, target = self._prepare_val_noisy_before_forward(
-            batch_size, num_channels_latents, in_height, in_width, person_warped_latent.dtype,
+            batch_size, num_channels_latents, in_height, in_width, person_masked_latent.dtype,
         )  # target maybe None
         self._debug_print("noisy", noisy)
 
@@ -294,7 +316,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
             noisy_double = self.val_scheduler.scale_model_input(noisy_double, t_double)
             
             apply_latents = torch.cat([
-                noisy_double, inpaint_mask_latent, person_masked_latent, pose_map, sketch
+                noisy_double, inpaint_mask_latent, person_masked_latent, pose_map, sketch, person_warped_latent
             ], dim=1)
             self._debug_print("apply_latents", apply_latents)
 
@@ -344,12 +366,16 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
+        trainable_params = self.trainable_params()
+        optimizer = optim.Adam(trainable_params, lr=1e-4, betas=(0.5, 0.99))
+        return optimizer
+
+    def trainable_params(self) -> list:
         trainable_params = []
         for name, param in self.named_parameters():
             if param.requires_grad:
                 trainable_params.append(param)
-        optimizer = optim.Adam(trainable_params, lr=1e-4, betas=(0.5, 0.99))
-        return optimizer
+        return trainable_params
 
     def _prepare_shared_latents_before_forward(
             self,
@@ -551,7 +577,6 @@ class MultiGarmentDesignerPL(pl.LightningModule):
             loss=loss,
         )
 
-
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline._encode_prompt
     def _encode_prompt(self, prompt, device, num_images_per_prompt, do_classifier_free_guidance, negative_prompt):
         r"""
@@ -712,6 +737,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         masked_image_latents = masked_image_latents.to(device=device, dtype=dtype)
         return mask, masked_image_latents
 
+    @rank_zero_only
     def _log_images(
             self,
             mode: str,
@@ -730,6 +756,8 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         warped_person = inputs.warped_person
         sketch = inputs.sketch
         person_fn = inputs.person_fn
+        self._debug_print("log_person", person)
+        self._debug_print("log_pose_map", pose_map)
 
         out_person = outputs.pred_rgb
         batch_size = out_person.shape[0]
@@ -772,20 +800,36 @@ class MultiGarmentDesignerPL(pl.LightningModule):
 
     @staticmethod
     def _vis_text_as_pils(texts: List[str]):
-        width = 100
-        height = 100
+        width = 256
+        height = 256
         background_color = (255, 255, 255)
+        line_padding = 16
+        font_size = 10
+        font_color = (0, 0, 0)
+        font = ImageFont.truetype("unifont", size=font_size, )
 
         ret_pils = []
         for b_idx in range(len(texts)):
             image = Image.new('RGB', (width, height), background_color)
             draw = ImageDraw.Draw(image)
-            font_size = 40
-            font_color = (0, 0, 0)
             text = texts[b_idx]
-            text_position = (5, 5)
-            draw.text(text_position, text, fill=font_color)
-            ret_pils.append(image)
+
+            lines = []
+            index = 0
+            for i in range(len(text)):
+                tw, _ = draw.textsize(text[index: i + 1], font=font)
+                if tw > width:
+                    lines.append(text[index:i])
+                    index = i
+            lines.append(text[index:])
+            length = len(lines)
+
+            bg = Image.new(mode='RGBA', size=(width, (font_size * length + line_padding * (length - 1))), color=background_color)
+            t_draw = ImageDraw.Draw(bg)
+            for i in range(len(lines)):
+                t_draw.text(xy=(0, i * (font_size + line_padding)), text=lines[i], font=font, fill=font_color)
+
+            ret_pils.append(bg)
         return ret_pils
 
     @staticmethod
