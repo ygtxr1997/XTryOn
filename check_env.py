@@ -269,14 +269,25 @@ def check_mgd():
     # pil = infer.forward_rgb_as_pil(np.array(test_img))
     # pil.save("tmp_pidinet.png")
 
+    test_weight_path = "/cfs/yuange/code/XTryOn/lightning_logs/mgd/2023_11_17T15_44_47/checkpoints/epoch=99-step=112000.ckpt"
+
     from models.generate.image_infer import mgd
-    model = mgd(in_channels=28 + 3)
+    model = mgd(
+        in_channels=28 + 4,
+        out_channels=4 + 1,
+        pretrained=True,
+        weight_path=None,
+    )
 
     # from models.generate.image_infer import MGDBatchInfer
     # model_img = Image.open("samples/shirt_long_person.png")
     # model_rgb = np.array(model_img)
-    # mgd_infer = MGDBatchInfer()
-    # mgd_infer.forward_rgb_as_pil(model_rgb)
+    # test_prompt = "a cropped top with red and black stripes"
+    # mgd_infer = MGDBatchInfer(
+    #     unet_in_channels=28 + 4,
+    #     unet_weight_path=test_weight_path
+    # )
+    # mgd_infer.forward_rgb_as_pil(model_rgb, test_prompt, model_rgb)
 
 
 def check_blip2():

@@ -23,27 +23,31 @@ class ModelHolder(object):
 
     def _load_models(self):
         if self.mgd_infer is None:
-            self.mgd_infer = MGDBatchInfer()
+            test_weight_path = "/cfs/yuange/code/XTryOn/lightning_logs/mgd/2023_11_17T15_44_47/checkpoints/epoch=99-step=112000.ckpt"
+            self.mgd_infer = MGDBatchInfer(
+                unet_in_channels=28 + 4,
+                unet_weight_path=test_weight_path
+            )
 
     def _reload_mgd(self, ckpt_path: str):
         self.mgd_infer = MGDBatchInfer()
 
-    def run(self, img_cloth, text_cloth,
+    def run(self, img_cloth, img_warped, text_cloth,
             use_reload: bool = False, ckpt_path: str = None):
-        # if use_reload_m2f:
-        #     self._reload_m2f(ckpt_path=m2f_ckpt_path)
+        # if use_reload:
+        #     self._reload_mgd(ckpt_path=ckpt_path)
         self._load_models()
 
-        gen_pils = self.mgd_infer.forward_rgb_as_pil(img_cloth, text_cloth)
+        gen_pils = self.mgd_infer.forward_rgb_as_pil(img_cloth, text_cloth, img_warped)
 
         gen_vis = [np.array(pil).astype(np.uint8) for pil in gen_pils]
         return gen_vis
 
 
-def mgd_run(img1: np.ndarray, text1: str,
+def mgd_run(img1: np.ndarray, img2: np.ndarray, text1: str,
             use_reload: bool, ckpt_path: str,
             ):
-    ret = model_holder.run(img1, text1, use_reload, ckpt_path)
+    ret = model_holder.run(img1, img2, text1, use_reload, ckpt_path)
     return ret
 
 
@@ -56,6 +60,7 @@ if __name__ == "__main__":
             with gr.Row():
                 with gr.Column(scale=3):
                     image1_input = gr.Image(label="cloth")
+                    image2_input = gr.Image(label="warped")
                     text1_input = gr.Text(label="prompt")
                     with gr.Column():
                         mgd_ckpt = gr.Textbox(label="MGD Ckpt", value="./pretrained/m2f/cloth_model.pt")
@@ -66,7 +71,7 @@ if __name__ == "__main__":
 
         image_button.click(
             mgd_run,
-            inputs=[image1_input, text1_input, mgd_reload, mgd_ckpt, ],
+            inputs=[image1_input, image2_input, text1_input, mgd_reload, mgd_ckpt, ],
             outputs=[image_output],
         )
 

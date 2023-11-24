@@ -22,6 +22,8 @@ class MGDBatchInfer(object):
                  infer_height: int = 512,
                  infer_width: int = 384,
                  device: str = "cuda:0",
+                 unet_in_channels: int = 28,
+                 unet_weight_path: str = None,
                  ):
 
         self.infer_height = infer_height
@@ -39,6 +41,8 @@ class MGDBatchInfer(object):
         self.edge_infer = None
 
         ''' mgd models '''
+        self.unet_in_channels = unet_in_channels
+        self.unet_weight_path = unet_weight_path
         self.unet = None
         self.text_encoder = None
         self.vae = None
@@ -50,6 +54,7 @@ class MGDBatchInfer(object):
     def forward_rgb_as_pil(self,
                            model_rgb: np.ndarray,
                            prompt: str,
+                           warped_rgb: np.ndarray = None,
                            num_samples: int = 4,
                            seed: int = 42,
                            ):
@@ -72,10 +77,15 @@ class MGDBatchInfer(object):
         ''' edge '''
         if self.edge_infer is None:
             self.edge_infer = PiDiNetBatchInfer()
-        # edge_ori_pil = self.edge_infer.forward_rgb_as_pil(model_rgb)
-        edge_ori_pil = Image.open("./tmp_ori_edge_modified.png")
+        edge_ori_pil = self.edge_infer.forward_rgb_as_pil(model_rgb)
+        # edge_ori_pil = Image.open("./tmp_ori_edge_modified.png")
         edge_ori_pil = Image.fromarray(np.array(edge_ori_pil).squeeze()).convert("L")
         edge_ori_pil = edge_ori_pil.resize((width, height), resample=Image.NEAREST)
+
+        ''' warped '''
+        if warped_rgb is not None:
+            warped_pil = Image.fromarray(warped_rgb.astype(np.uint8))
+            warped_down_rgb = np.array(warped_pil.resize((width, height), resample=Image.BILINEAR))
 
         ''' process input '''
         parse_dict = self._process_parse(parse_pil)
@@ -120,6 +130,7 @@ class MGDBatchInfer(object):
         mask_input = inpaint_mask.unsqueeze(0).cuda()
         sketch_input = edge_tensor.unsqueeze(0).cuda()
         pose_map_input = pose_dict["map"].unsqueeze(0).cuda()
+        warped_input = self.trans(warped_down_rgb).unsqueeze(0).cuda() if warped_rgb is not None else None
         print("tensors:", model_input.shape, mask_input.shape, sketch_input.shape, pose_map_input.shape)
 
         generator = torch.Generator("cuda").manual_seed(seed)
@@ -135,6 +146,7 @@ class MGDBatchInfer(object):
             image=model_input,
             mask_image=mask_input,
             pose_map=pose_map_input,
+            warped=warped_input,
             sketch=sketch_input,
             height=height,
             width=width,
@@ -153,10 +165,10 @@ class MGDBatchInfer(object):
         model_i0 = model_input[0] * 0.5 + 0.5
         parse_i0 = parse_dict["tensor"][0].to(device)
         for i in range(len(generated_images)):
-            # generated_images[i].save(f"tmp_y_gen_{seed}_{i:02d}.png")
+            generated_images[i].save(f"tmp_y_gen_{seed}_{i:02d}.png")
             final_img = self._compose_img(model_i0, generated_images[i], parse_i0)
             final_img = transforms.ToPILImage()(final_img)
-            # final_img.save(os.path.join(".", f"tmp_z_result_{i:02d}.png"))
+            final_img.save(os.path.join(".", f"tmp_z_result_{i:02d}.png"))
             ret_pils.append(final_img)
         return ret_pils
 
@@ -353,7 +365,11 @@ class MGDBatchInfer(object):
 
     def _load_mgd_models_and_pipeline(self):
         if self.unet is None:
-            self.unet = mgd()
+            self.unet = mgd(
+                pretrained=True,
+                in_channels=self.unet_in_channels,
+                weight_path=self.unet_weight_path,
+            )
         sd_inpaint_dir = "pretrained/stable-diffusion-inpainting"
         if self.text_encoder is None:
             self.text_encoder = CLIPTextModel.from_pretrained(sd_inpaint_dir + "/text_encoder")

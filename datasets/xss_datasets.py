@@ -278,6 +278,15 @@ class ProcessedDataset(Dataset):
 
     def __getitem__(self, index):
         in_item_dict = self._getitem_from_fulllist(index)  # keys()=self.input_keys
+
+        # pre-process, replace the gray pixels in warped with person
+        if "person" in self.output_keys and "warped_person" in self.output_keys:
+            warped = np.array(in_item_dict["warped_person"])
+            person_tmp = np.array(in_item_dict["person"].resize(in_item_dict["warped_person"].size))
+            positions = (warped[:, :, 0] == 127) & (warped[:, :, 1] == 127) & (warped[:, :, 2] == 127)
+            warped[positions] = person_tmp[positions]
+            in_item_dict["warped_person"] = Image.fromarray(warped)
+
         out_item_dict = {}
 
         width, height = self.scale_width, self.scale_height

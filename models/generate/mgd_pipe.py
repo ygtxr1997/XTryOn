@@ -416,6 +416,7 @@ class MGDPipe(DiffusionPipeline):
             mask_image: Union[torch.FloatTensor, PIL.Image.Image],
             pose_map: torch.FloatTensor,
             sketch: torch.FloatTensor,
+            warped: torch.FloatTensor = None,
             height: Optional[int] = None,
             width: Optional[int] = None,
             num_inference_steps: int = 50,
@@ -571,13 +572,22 @@ class MGDPipe(DiffusionPipeline):
         pose_map = torch.cat([torch.zeros_like(pose_map), pose_map]) if do_classifier_free_guidance else pose_map
         sketch = torch.cat([torch.zeros_like(sketch), sketch]) if do_classifier_free_guidance else sketch
 
+        # 7.b Prepare warped latent variables
+        if warped is not None:
+            zero_mask = torch.zeros_like(warped)
+            _, warped = self.prepare_mask_latents(
+                zero_mask, warped, batch_size * num_images_per_prompt, height, width,
+                text_embeddings.dtype, device, generator, do_classifier_free_guidance,
+            )
+
         # 8. Check that sizes of mask, masked image and latents match
         num_channels_mask = mask.shape[1]
         num_channels_masked_image = masked_image_latents.shape[1]
         num_channels_pose_map = pose_map.shape[1]
         num_channels_sketch = sketch.shape[1]
+        num_channels_warped = warped.shape[1] if warped is not None else 0
 
-        if num_channels_latents + num_channels_mask + num_channels_masked_image + num_channels_pose_map + num_channels_sketch != self.unet.config.in_channels:
+        if num_channels_latents + num_channels_mask + num_channels_masked_image + num_channels_pose_map + num_channels_sketch + num_channels_warped != self.unet.config.in_channels:
             raise ValueError(
                 f"Incorrect configuration settings! The config of `pipeline.unet`: {self.unet.config} expects"
                 f" {self.unet.config.in_channels} but received `num_channels_latents`: {num_channels_latents} +"
@@ -608,6 +618,10 @@ class MGDPipe(DiffusionPipeline):
                 #       pose_map.to(mask.dtype).shape, local_sketch.to(mask.dtype).shape)
                 latent_model_input = torch.cat(
                     [latent_model_input, mask, masked_image_latents, pose_map.to(mask.dtype), local_sketch.to(mask.dtype)],
+                    dim=1)
+                if warped is not None:
+                    latent_model_input = torch.cat(
+                        [latent_model_input, warped],
                     dim=1)
 
                 # predict the noise residual

@@ -1,5 +1,6 @@
 import os
 from typing import Union, List
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import numpy as np
@@ -10,6 +11,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
 import torch.nn.functional as F
+from torchvision.ops import sigmoid_focal_loss
 import lightning.pytorch as pl
 from lightning_utilities.core.rank_zero import rank_zero_only
 from transformers import CLIPTextModel, CLIPTokenizer
@@ -49,9 +51,22 @@ def compute_snr(noise_scheduler, timesteps):
     return snr
 
 
+def extract_unet_from_ckpt(ckpt_path: str):
+    w = torch.load(ckpt_path, map_location="cpu")["state_dict"]
+    extract_key = "unet."
+    unet_dict = OrderedDict()
+    for k in w.keys():
+        if extract_key in k:
+            unet_dict[k[len(extract_key):]] = w[k]
+    return unet_dict
+
+
 # mgd is the name of entrypoint
-def mgd(dataset: str = "vitonhd", pretrained: bool = True,
+def mgd(dataset: str = "vitonhd",
+        pretrained: bool = True,
+        weight_path: str = None,
         in_channels: int = 28,
+        out_channels: int = 4,
         zero_init_extra_channels: bool = True,
         ) -> UNet2DConditionModel:
     """ # This docstring shows up in hub.help()
@@ -62,31 +77,60 @@ def mgd(dataset: str = "vitonhd", pretrained: bool = True,
         "configs/runwayml/stable-diffusion-inpainting",
         subfolder="unet", local_files_only=True)
     config['in_channels'] = in_channels
+    config['out_channels'] = out_channels
     unet = UNet2DConditionModel.from_config(config)
 
     if pretrained:
-        checkpoint = f"pretrained/mgd/{dataset}.pth"
-        weight = torch.load(checkpoint, map_location="cpu")
+        if weight_path is None:
+            weight_path = f"pretrained/mgd/{dataset}.pth"  # in:28channels, out:4channels
+            weight = torch.load(weight_path, map_location="cpu")
+            if in_channels > 28:
+                weight_28channels = weight
+                weight_31channels = weight_28channels
 
-        if in_channels > 28:
-            weight_28channels = weight
-            weight_31channels = weight_28channels
+                ori_c_out, ori_c_in, ori_h, ori_w = weight_31channels["conv_in.weight"].shape
+                dtype = weight_31channels["conv_in.weight"].dtype
+                extra_shape = (ori_c_out, in_channels - ori_c_in, ori_h, ori_w)
 
-            ori_c_out, ori_c_in, ori_h, ori_w = weight_31channels["conv_in.weight"].shape
-            dtype = weight_31channels["conv_in.weight"].dtype
-            extra_shape = (ori_c_out, in_channels - ori_c_in, ori_h, ori_w)
+                if zero_init_extra_channels:
+                    extra_kernels = torch.zeros(extra_shape, dtype=dtype)
+                else:
+                    extra_kernels = torch.randn(extra_shape, dtype=dtype)
+                weight_31channels["conv_in.weight"] = torch.cat([
+                    weight_28channels["conv_in.weight"],
+                    extra_kernels
+                ], dim=1)  # zero_init
+                weight = weight_31channels
+            if out_channels > 4:
+                weight_4channels = weight
+                weight_5channels = weight_4channels
 
-            if zero_init_extra_channels:
-                extra_kernels = torch.zeros(extra_shape, dtype=dtype)
-            else:
-                extra_kernels = torch.randn(extra_shape, dtype=dtype)
-            weight_31channels["conv_in.weight"] = torch.cat([
-                weight_28channels["conv_in.weight"],
-                extra_kernels
-            ], dim=1)  # zero_init
+                ori_c_out, ori_c_in, ori_h, ori_w = weight_4channels["conv_out.weight"].shape
+                dtype = weight_5channels["conv_out.weight"].dtype
+                extra_shape = (out_channels - ori_c_out, ori_c_in, ori_h, ori_w)
+
+                if zero_init_extra_channels:
+                    extra_kernels = torch.zeros(extra_shape, dtype=dtype)
+                    extra_bias = torch.zeros(out_channels - ori_c_out, dtype=dtype)
+                else:
+                    extra_kernels = torch.randn(extra_shape, dtype=dtype)
+                    extra_bias = torch.randn(out_channels - ori_c_out, dtype=dtype)
+                weight_5channels["conv_out.weight"] = torch.cat([
+                    weight_4channels["conv_out.weight"],
+                    extra_kernels
+                ], dim=0)  # zero_init
+                weight_5channels["conv_out.bias"] = torch.cat([
+                    weight_4channels["conv_out.bias"],
+                    extra_bias
+                ], dim=0)  # zero_init
+                weight = weight_5channels
+        elif ".ckpt" in weight_path:
+            weight = extract_unet_from_ckpt(weight_path)
+        else:
+            weight = torch.load(weight_path, map_location="cpu")
 
         unet.load_state_dict(weight)
-        print(f"[mgd] model loaded from: {checkpoint}")
+        print(f"[mgd] model loaded from: {weight_path}")
 
     return unet
 
@@ -115,6 +159,7 @@ class MultiGarmentDesignerOutput(BaseOutput):
 
     loss: torch.Tensor
     pred_rgb: np.ndarray
+    final_rgb: np.ndarray
 
 
 @dataclass
@@ -132,6 +177,7 @@ class MultiGarmentDesignerLatentOutput(BaseOutput):
 
     loss: torch.Tensor
     unet_pred: torch.Tensor
+    loss_warp: Union[torch.Tensor, float]
 
 
 class MultiGarmentDesignerPL(pl.LightningModule):
@@ -142,12 +188,14 @@ class MultiGarmentDesignerPL(pl.LightningModule):
                  noise_offset: float = 0.,  # recommended 0.1
                  input_perturbation: float = 0.,  # recommended 0.1
                  snr_gamma: float = None,  # recommended 5.0
+                 add_warp: bool = False,
                  ):
         super().__init__()
 
         ''' mgd models '''
         sd_inpaint_dir = "pretrained/stable-diffusion-inpainting"
-        self.unet = mgd(in_channels=(28 + 4))  # 4: vae latent channels
+        out_channels = 4  # fixed as 4
+        self.unet = mgd(in_channels=(28 + 4), out_channels=out_channels)  # 4: vae latent channels
         self.text_encoder = CLIPTextModel.from_pretrained(sd_inpaint_dir + "/text_encoder")
         self.vae = AutoencoderKL.from_pretrained(sd_inpaint_dir + "/vae")
         self.tokenizer = CLIPTokenizer.from_pretrained(sd_inpaint_dir + "/tokenizer")
@@ -168,6 +216,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         self.noise_offset = noise_offset
         self.input_perturbation = input_perturbation
         self.snr_gamma = snr_gamma
+        self.add_warp = add_warp
 
         ''' others '''
         self.generator = torch.Generator("cuda").manual_seed(seed)
@@ -218,21 +267,27 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         in_prompt = cloth_caption
         if np.random.uniform() <= self.drop_prompt:
             in_prompt = [""] * len(cloth_caption)
+        vae_input_images = [person, person, warped_person, warped_person]
+        # if self.add_warp:
+        #     vae_input_images = [person - warped_person, person - warped_person, warped_person]  # TODO: residual prediction
         input_latents = self._prepare_shared_latents_before_forward(
             in_prompt,
-            [person, person, warped_person],
-            [zero_mask, inpaint_mask, zero_mask],
+            vae_input_images,
+            [zero_mask, inpaint_mask, zero_mask, inpaint_mask],
             pose_map, sketch, num_images_per_prompt
         )
-        person_gt_latent, person_masked_latent, person_warped_latent = input_latents.masked_image.chunk(3)
-        _, inpaint_mask_latent, _ = input_latents.inpaint_mask.chunk(3)
+        person_gt_latent, person_masked_latent, person_warped_latent, person_warped_masked_latent = input_latents.masked_image.chunk(4)
+        if self.add_warp:
+            person_gt_latent = person_gt_latent - person_warped_latent
+            person_masked_latent = person_masked_latent - person_warped_masked_latent
+        _, inpaint_mask_latent, _, _ = input_latents.inpaint_mask.chunk(4)
         text_embedding = input_latents.text_embedding
         pose_map = input_latents.pose_map
         sketch = input_latents.sketch
 
         ''' get noisy and target '''
         num_channels_latents = self.vae.config.latent_channels
-        noisy, target = self._prepare_val_noisy_before_forward(
+        noisy, target = self._prepare_train_noisy_before_forward(
             batch_size, num_channels_latents, in_height, in_width, person_gt_latent.dtype,
             gt_image=person_gt_latent, timestep=timestep
         )  # target maybe None
@@ -245,12 +300,15 @@ class MultiGarmentDesignerPL(pl.LightningModule):
 
         # predict the noise residual
         latent_outputs = self.forward(
-            apply_latents, text_embedding, timestep, target
+            apply_latents, text_embedding, timestep, target,
+            gt_image=person_gt_latent,
         )
         loss = latent_outputs.loss
+        loss_warp = latent_outputs.loss_warp
 
         ''' Logging to TensorBoard (if installed) by default '''
         self.log("train_loss", loss)
+        self.log("train_loss_warp", loss_warp)
 
         return loss
 
@@ -282,15 +340,21 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         ''' get input latents '''
         zero_mask = torch.zeros_like(inpaint_mask)
         neg_prompts = [""] * batch_size
+        vae_input_images = [person, person, warped_person, warped_person]
+        # if self.add_warp:
+        #     vae_input_images = [person - warped_person, person - warped_person, warped_person]  # TODO: residual prediction
         input_latents = self._prepare_shared_latents_before_forward(
             cloth_caption,
-            [person, person, warped_person],
-            [zero_mask, inpaint_mask, zero_mask],
+            vae_input_images,
+            [zero_mask, inpaint_mask, zero_mask, inpaint_mask],
             pose_map, sketch, num_images_per_prompt,
             do_classifier_free_guidance=do_classifier_free_guidance,
         )
-        person_gt_latent, person_masked_latent, person_warped_latent = input_latents.masked_image.chunk(3)
-        _, inpaint_mask_latent, _ = input_latents.inpaint_mask.chunk(3)
+        person_gt_latent, person_masked_latent, person_warped_latent, person_warped_masked_latent = input_latents.masked_image.chunk(4)
+        if self.add_warp:
+            person_gt_latent = person_gt_latent - person_warped_latent
+            person_masked_latent = person_masked_latent - person_warped_masked_latent
+        _, inpaint_mask_latent, _, _ = input_latents.inpaint_mask.chunk(4)
         text_embedding = input_latents.text_embedding
         pose_map = input_latents.pose_map
         sketch = input_latents.sketch
@@ -327,7 +391,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
 
             # predict the noise residual
             latent_outputs = self.forward(
-                apply_latents, text_embedding, t_double, target
+                apply_latents, text_embedding, t_double, target,
             )
             noise_pred = latent_outputs.unet_pred
             loss = latent_outputs.loss
@@ -343,14 +407,17 @@ class MultiGarmentDesignerPL(pl.LightningModule):
             self._debug_print("noisy", noisy)
             self.val_scheduler.alphas_cumprod = self.val_scheduler.alphas_cumprod.to(
                 device=device, dtype=self.vae.dtype)
-            denoise = self.val_scheduler.step(noise_pred, t, noisy, eta=0., generator=self.generator).prev_sample.to(
-                self.vae.dtype)
+            scheduler_result = self.val_scheduler.step(noise_pred, t, noisy, eta=0., generator=self.generator)
+            denoise = scheduler_result.prev_sample.to(self.vae.dtype)
+            pred_z0 = scheduler_result.pred_original_sample.to(self.vae.dtype)
+
             noisy = denoise
             self._debug_print("denoise", denoise)
 
         # post-process
         outputs = self._post_process_after_forward(
-            noisy, loss
+            noisy, loss, person_warped_latent,
+            do_classifier_free_guidance=do_classifier_free_guidance,
         )
         loss = outputs.loss
         pred_rgb = outputs.pred_rgb
@@ -453,8 +520,8 @@ class MultiGarmentDesignerPL(pl.LightningModule):
             in_height: int,
             in_width: int,
             dtype: torch.dtype,
-            timestep: torch.Tensor,
             gt_image: torch.Tensor,
+            timestep: torch.Tensor,
     ) -> (torch.Tensor, torch.Tensor):
         # 3. sample noise
         scale_factor = self.vae_scale_factor
@@ -480,7 +547,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
             noisy_latent = self.noise_scheduler.add_noise(gt_image, noise, timestep)
 
         # 6. get the target for loss calculation
-        target = self._prepare_pred_target_before_forward(noise, gt_image, timestep)
+        target = self._prepare_pred_target_before_forward(noise, gt_image, timestep)  # usually 'noise'
 
         return noisy_latent, target
 
@@ -533,10 +600,28 @@ class MultiGarmentDesignerPL(pl.LightningModule):
             text_embedding: torch.Tensor,
             timestep: torch.Tensor,
             target: torch.Tensor = None,
+            gt_image: torch.Tensor = None,
     ) -> MultiGarmentDesignerLatentOutput:
         """ Calc loss """
         # 7. predict noise residual and compute loss
         model_pred = self.unet(apply_latents, timestep, encoder_hidden_states=text_embedding).sample
+
+        loss_warp = 0.
+        # if self.add_warp:  # TODO: how to add, to learn the blending mask
+        #     vae_channels = self.vae.config.latent_channels
+        #     noisy = apply_latents[:, :vae_channels]  # the first 4 channels
+        #     warp_latent = apply_latents[:, -vae_channels:]  # the last 4 channels
+        #     noise_pred = model_pred[:, :-1]  # the first 4 channels
+        #     mask_pred = model_pred[:, -1:]  # the last 1 channel, init as 0
+        #
+        #     device = model_pred.device
+        #     self.noise_scheduler.alphas_cumprod = self.noise_scheduler.alphas_cumprod.to(
+        #         device=device, dtype=self.vae.dtype)
+        #     z0_pred = self.noise_scheduler.step(
+        #         noise_pred, timestep, noisy, eta=0., generator=self.generator).pred_original_sample.to(self.vae.dtype)
+        #
+        #     blended = mask_pred * z0_pred + (1 - mask_pred) * warp_latent
+        #     loss_warp = F.mse_loss(blended.float(), gt_image.float(), reduction="mean")
 
         if target is None:
             target = model_pred
@@ -561,24 +646,53 @@ class MultiGarmentDesignerPL(pl.LightningModule):
             loss = loss.mean()
         self._debug_print("loss", loss)
 
+        loss += loss_warp
+
         return MultiGarmentDesignerLatentOutput(
             loss=loss,
             unet_pred=model_pred,
+            loss_warp=loss_warp,
         )
 
     def _post_process_after_forward(
             self,
             denoise_latents: torch.Tensor,
             loss: torch.Tensor = None,
+            warped_person: torch.Tensor = None,
+            do_classifier_free_guidance: bool = True,
     ):
         latents = 1 / 0.18215 * denoise_latents
-        image = self.vae.decode(latents).sample
-        image = (image / 2 + 0.5).clamp(0, 1)
-        # we always cast to float32 as this does not cause significant overhead and is compatible with float16
-        image = image.cpu().permute(0, 2, 3, 1).float().numpy()
-        image_rgb = (image * 255.).astype(np.uint8)
+        image_pred = self.vae.decode(latents).sample
+        if self.add_warp:
+            if do_classifier_free_guidance:
+                warped_person = warped_person.chunk(2)[0]
+            print("denoise_latents", denoise_latents.min(), denoise_latents.max(), denoise_latents.shape)
+            print("warped", warped_person.min(), warped_person.max(), warped_person.shape)
+            latents = latents + 1 / 0.18215 * warped_person
+            image = self.vae.decode(latents).sample
+            print("image", image.min(), image.max(), image.shape)
+        else:
+            image = image_pred
+
+        # if self.add_warp:
+        #     image = image_pred + warped_person
+        #     print("image", image.min(), image.max(), image.shape)
+        #     print("warped", warped_person.min(), warped_person.max(), warped_person.shape)
+        # else:
+        #     image = image_pred
+
+        def _tensor_to_rgb(x_tensor: torch.Tensor):
+            x_tensor = (x_tensor / 2 + 0.5).clamp(0, 1)
+            # we always cast to float32 as this does not cause significant overhead and is compatible with float16
+            x_tensor = x_tensor.cpu().permute(0, 2, 3, 1).float().numpy()
+            x_rgb = (x_tensor * 255.).astype(np.uint8)
+            return x_rgb
+
+        image_pred_rgb = _tensor_to_rgb(image_pred)
+        image_rgb = _tensor_to_rgb(image)
         return MultiGarmentDesignerOutput(
-            pred_rgb=image_rgb,
+            pred_rgb=image_pred_rgb,
+            final_rgb=image_rgb,
             loss=loss,
         )
 
@@ -764,7 +878,8 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         self._debug_print("log_person", person)
         self._debug_print("log_pose_map", pose_map)
 
-        out_person = outputs.pred_rgb
+        out_pred = outputs.pred_rgb
+        out_person = outputs.final_rgb
         batch_size = out_person.shape[0]
 
         persons_pils = tensor_to_rgb(person[:bs], out_batch_idx=None, out_as_pil=True)
@@ -774,6 +889,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         pose_map_pils = self._vis_pose_map_as_pils(pose_map[:bs])
         cloth_caption_pils = self._vis_text_as_pils(cloth_caption[:bs])
         out_person_pils = [Image.fromarray(rgb) for rgb in out_person[:bs]]
+        out_pred_pils = [Image.fromarray(rgb) for rgb in out_pred[:bs]]
 
         # only save the 1st image for each batch
         vis_len = len(persons_pils)
@@ -785,9 +901,10 @@ class MultiGarmentDesignerPL(pl.LightningModule):
             warped_person_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_in_02a_warped.png"))
             inpaint_mask_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_in_03a_inpaint.png"))
             sketch_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_in_04a_sketch.png"))
-            pose_map_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_in_05a_pose_map.png"))
+            # pose_map_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_in_05a_pose_map.png"))
             cloth_caption_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_in_06a_cloth_caption.png"))
             out_person_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_out_01a_person.png"))
+            out_pred_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_out_02a_pred.png"))
 
     @staticmethod
     def _vis_pose_map_as_pils(pose_map: torch.Tensor):

@@ -32,6 +32,7 @@ def main(opt):
         noise_offset=0.1,
         input_perturbation=0.1,
         snr_gamma=5.0,
+        add_warp=True,
     )
 
     log_version = now = datetime.datetime.now().strftime("%Y_%m_%dT%H_%M_%S")
