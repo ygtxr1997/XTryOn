@@ -157,6 +157,7 @@ class MGDBatchInfer(object):
             start_cond_rate=start_cond_rate,
             no_pose=no_pose,
             negative_prompt=neg_prompts,
+            use_ddim_inversion=False,
         ).images  # num_samples*[Image.Image]
 
         ''' vis outputs '''

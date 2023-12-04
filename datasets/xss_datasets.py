@@ -15,7 +15,7 @@ from torch.utils.data import Dataset
 from torchvision.transforms import transforms
 from torchvision.ops import masks_to_boxes
 
-from tools import kpoint_to_heatmap
+from tools import kpoint_to_heatmap, de_shadow_rgb_to_rgb
 
 
 class CrawledDataset(Dataset):
@@ -307,6 +307,11 @@ class ProcessedDataset(Dataset):
                 )
                 out_item_dict["inpaint_mask"] = inpaint_mask  # (1,H,W), in [0,1]
                 out_item_dict["pose_map"] = pose_dict["map"]  # (18,H,W), in [0,1]
+            elif out_key in ("deshadow",):
+                de_shadow = self._process_deshadow(person_pil=in_item_dict["person"],
+                                                   parse_pil=in_item_dict["parse"])
+                de_shadow = de_shadow.resize((width, height), resample=Image.BILINEAR)
+                out_item_dict["deshadow"] = self.trans(de_shadow)
             elif out_key in ("dwpose", "densepose", "m2f_person", "m2f_cloth", "parse", "cloth_mask", "pidinet",
                              ):  # seg/parse/mask resized with "NEAREST"
                 in_val: Image.Image = in_item_dict[out_key]
@@ -444,8 +449,21 @@ class ProcessedDataset(Dataset):
                 in_keys.append(key)
             if key in ("inpaint_mask", "pose_map",):  # has dependencies
                 in_keys.extend(["dwpose_json", "parse"])
+            if key in ("deshadow",):  # has dependencies
+                in_keys.extend(["person", "parse"])
         in_keys = list(set(in_keys))  # remove repeat
         return in_keys
+
+    def _process_deshadow(self, person_pil: Image.Image, parse_pil: Image.Image,
+                          down_scale_ratio=2.0,
+                          ):
+        person_rgb = np.array(person_pil).astype(np.uint8)
+        parse_rgb = np.array(parse_pil).astype(np.uint8)
+        de_shadow = de_shadow_rgb_to_rgb(
+            person_rgb, parse_rgb
+        )
+        de_shadow_pil = Image.fromarray(de_shadow)
+        return de_shadow_pil
 
     def _process_parse(self, parse_pil: Image.Image):
         # modified on models/generate/image_infer.py

@@ -2,7 +2,7 @@ name: refusion
 suffix: ~  # add suffix to saved images
 model: denoising
 distortion: deshadow
-gpu_ids: [0]
+gpu_ids: [3]
 
 sde:
   max_sigma: 50
@@ -36,4 +36,4 @@ network_G:
 
 #### path
 path:
-  pretrain_model_G: pretrained/refusion.pth
+  pretrain_model_G: /cfs/yuange/code/XTryOn/pretrained/ir_sde/reffusion-deshadow.pth

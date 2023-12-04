@@ -145,6 +145,7 @@ class MultiGarmentDesignerInput(BaseOutput):
     warped_person: torch.Tensor
     sketch: torch.Tensor
     person_fn: List[str]
+    de_shadow: torch.Tensor
 
 
 @dataclass
@@ -226,7 +227,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
             self.train_set,
             batch_size=4,
             shuffle=True,
-            num_workers=4,
+            num_workers=8,
             drop_last=True,
         )
         return dataloader
@@ -250,6 +251,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
             warped_person = batch["warped_person"]
             sketch = batch["pidinet"]
             person_fn = batch["person_fn"]
+            de_shadow = batch["deshadow"]
 
         batch_size, in_channels, in_height, in_width = person.shape
         num_images_per_prompt = 1
@@ -267,7 +269,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         in_prompt = cloth_caption
         if np.random.uniform() <= self.drop_prompt:
             in_prompt = [""] * len(cloth_caption)
-        vae_input_images = [person, person, warped_person, warped_person]
+        vae_input_images = [person, person, de_shadow, de_shadow]
         # if self.add_warp:
         #     vae_input_images = [person - warped_person, person - warped_person, warped_person]  # TODO: residual prediction
         input_latents = self._prepare_shared_latents_before_forward(
@@ -276,10 +278,10 @@ class MultiGarmentDesignerPL(pl.LightningModule):
             [zero_mask, inpaint_mask, zero_mask, inpaint_mask],
             pose_map, sketch, num_images_per_prompt
         )
-        person_gt_latent, person_masked_latent, person_warped_latent, person_warped_masked_latent = input_latents.masked_image.chunk(4)
+        person_gt_latent, person_masked_latent, person_lq_latent, person_lq_masked_latent = input_latents.masked_image.chunk(4)
         if self.add_warp:
-            person_gt_latent = person_gt_latent - person_warped_latent
-            person_masked_latent = person_masked_latent - person_warped_masked_latent
+            person_gt_latent = person_gt_latent - person_lq_latent
+            person_masked_latent = person_masked_latent - person_lq_masked_latent
         _, inpaint_mask_latent, _, _ = input_latents.inpaint_mask.chunk(4)
         text_embedding = input_latents.text_embedding
         pose_map = input_latents.pose_map
@@ -294,7 +296,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
 
         ''' forward '''
         apply_latents = torch.cat([
-            noisy, inpaint_mask_latent, person_masked_latent, pose_map, sketch, person_warped_latent
+            noisy, inpaint_mask_latent, person_masked_latent, pose_map, sketch, person_lq_latent
         ], dim=1)
         self._debug_print("apply_latents", apply_latents)
 
@@ -322,6 +324,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
             warped_person = batch["warped_person"]
             sketch = batch["pidinet"]
             person_fn = batch["person_fn"]
+            de_shadow = batch["deshadow"]
 
         batch_size, in_channels, in_height, in_width = person.shape
         num_images_per_prompt = 1
@@ -362,9 +365,11 @@ class MultiGarmentDesignerPL(pl.LightningModule):
 
         ''' classifier-free guidance '''
         if do_classifier_free_guidance:
+            person_gt_latent = torch.cat([person_gt_latent] * 2)
             inpaint_mask_latent = torch.cat([inpaint_mask_latent] * 2)
             person_masked_latent = torch.cat([person_masked_latent] * 2)
             person_warped_latent = torch.cat([person_warped_latent] * 2)
+            person_warped_masked_latent = torch.cat([person_warped_masked_latent] * 2)
             pose_map = torch.cat([torch.zeros_like(pose_map), pose_map])
             sketch = torch.cat([torch.zeros_like(sketch), sketch])
 
@@ -375,6 +380,11 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         )  # target maybe None
         self._debug_print("noisy", noisy)
 
+        if np.random.uniform() > 0.5:
+            val_gt = True
+        else:
+            val_gt = False
+
         ''' denoise loop '''
         loss = 0.
         for i in tqdm(range(timesteps.shape[1])):
@@ -383,10 +393,16 @@ class MultiGarmentDesignerPL(pl.LightningModule):
             noisy_double = torch.cat([noisy] * 2) if do_classifier_free_guidance else noisy
             t_double = torch.cat([t] * 2) if do_classifier_free_guidance else t
             noisy_double = self.val_scheduler.scale_model_input(noisy_double, t_double)
-            
-            apply_latents = torch.cat([
-                noisy_double, inpaint_mask_latent, person_masked_latent, pose_map, sketch, person_warped_latent
-            ], dim=1)
+
+            # try consistent images of masked and gt images
+            if val_gt:
+                apply_latents = torch.cat([
+                    noisy_double, inpaint_mask_latent, person_masked_latent, pose_map, sketch, person_gt_latent
+                ], dim=1)
+            else:
+                apply_latents = torch.cat([
+                    noisy_double, inpaint_mask_latent, person_warped_masked_latent, pose_map, sketch, person_warped_latent
+                ], dim=1)
             self._debug_print("apply_latents", apply_latents)
 
             # predict the noise residual
@@ -431,6 +447,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
             warped_person=batch["warped_person"],
             sketch=batch["pidinet"],
             person_fn=batch["person_fn"],
+            de_shadow=batch["deshadow"]
         )
         self.log("val_loss", loss)
         self._log_images("val", batch_input, outputs)
@@ -875,6 +892,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         warped_person = inputs.warped_person
         sketch = inputs.sketch
         person_fn = inputs.person_fn
+        de_shadow = inputs.de_shadow
         self._debug_print("log_person", person)
         self._debug_print("log_pose_map", pose_map)
 
@@ -883,6 +901,7 @@ class MultiGarmentDesignerPL(pl.LightningModule):
         batch_size = out_person.shape[0]
 
         persons_pils = tensor_to_rgb(person[:bs], out_batch_idx=None, out_as_pil=True)
+        de_shadow_pils = tensor_to_rgb(de_shadow[:bs], out_batch_idx=None, out_as_pil=True)
         warped_person_pils = tensor_to_rgb(warped_person[:bs], out_batch_idx=None, out_as_pil=True)
         inpaint_mask_pils = tensor_to_rgb(inpaint_mask[:bs], out_batch_idx=None, out_as_pil=True, is_zero_center=False)
         sketch_pils = tensor_to_rgb(sketch[:bs], out_batch_idx=None, out_as_pil=True, is_zero_center=False)
@@ -898,13 +917,14 @@ class MultiGarmentDesignerPL(pl.LightningModule):
                 continue
             person_fn_wo_ext = os.path.splitext(person_fn[b_idx])[0]
             persons_pils[b_idx].save(os.path.join(save_dir, save_prefix + f"_in_01a_person_{person_fn_wo_ext}.png"))
+            de_shadow_pils[b_idx].save(os.path.join(save_dir, save_prefix + f"_in_01b_deshadow_{person_fn_wo_ext}.png"))
             warped_person_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_in_02a_warped.png"))
             inpaint_mask_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_in_03a_inpaint.png"))
             sketch_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_in_04a_sketch.png"))
             # pose_map_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_in_05a_pose_map.png"))
             cloth_caption_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_in_06a_cloth_caption.png"))
             out_person_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_out_01a_person.png"))
-            out_pred_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_out_02a_pred.png"))
+            # out_pred_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_out_02a_pred.png"))
 
     @staticmethod
     def _vis_pose_map_as_pils(pose_map: torch.Tensor):

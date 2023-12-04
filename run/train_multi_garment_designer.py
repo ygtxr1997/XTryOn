@@ -18,11 +18,11 @@ def main(opt):
 
     train_set = MergedProcessedDataset(
         "/cfs/yuange/datasets/xss/processed/",
-        ["DressCode/upper", "VITON-HD/train"],
+        ["VITON-HD/train", ],  # ["DressCode/upper", "VITON-HD/train"],
         scale_height=512,
         scale_width=384,
         output_keys=(
-            "person", "inpaint_mask", "pose_map", "pidinet", "blip2_cloth", "warped_person", "person_fn",
+            "person", "inpaint_mask", "pose_map", "pidinet", "blip2_cloth", "warped_person", "person_fn", "deshadow"
         ),
         debug_len=None,
     )
@@ -32,7 +32,7 @@ def main(opt):
         noise_offset=0.1,
         input_perturbation=0.1,
         snr_gamma=5.0,
-        add_warp=True,
+        add_warp=False,
     )
 
     log_version = now = datetime.datetime.now().strftime("%Y_%m_%dT%H_%M_%S")
@@ -51,7 +51,7 @@ def main(opt):
     )
     trainer = pl.Trainer(
         strategy="ddp",
-        devices="2,3,4,5,6,7",
+        devices="0,1,2,3,4,5,6,7",
         fast_dev_run=False,
         max_epochs=100,
         limit_val_batches=1,

@@ -204,6 +204,89 @@ def kpoint_to_heatmap(kpoint, shape, sigma):
     return torch.Tensor(heatmap)
 
 
+def de_shadow_rgb_to_rgb(img_rgb: np.ndarray,
+                         parse_seg: np.ndarray,
+                         offset: int = 15,
+                         shadow_ratio: float = 0.01,
+                         relighting_ratio: float = 0.15,
+                         gauss_kernel: int = 3,
+                         ):
+    h, w, c = img_rgb.shape
+    img_rgb = cv2.resize(img_rgb, dsize=(384, 512), interpolation=cv2.INTER_LINEAR)
+    parse_seg = cv2.resize(parse_seg, dsize=(384, 512), interpolation=cv2.INTER_NEAREST)
+
+    h, w, c = img_rgb.shape
+    img_gray = np.array(Image.fromarray(img_rgb).convert("L"))[:, :, np.newaxis]
+
+    parse_cloth_labels = [5, 6, 7]
+    cloth_mask = (parse_seg == 5).astype(np.float32) + \
+                 (parse_seg == 6).astype(np.float32) + \
+                 (parse_seg == 7).astype(np.float32)
+    cloth_mask_vis = (cloth_mask * 255.).clip(0, 255).astype(np.uint8)
+    cloth_mask = cloth_mask[:, :, np.newaxis]
+    cloth_pixels_cnt = cloth_mask.sum()
+
+    cloth_rgb = (img_rgb * cloth_mask).clip(0, 255).astype(np.uint8)
+
+    ''' mean filter '''
+    mean_rgb_val = np.array([cloth_rgb[:, :, 0].sum() / cloth_pixels_cnt,
+                             cloth_rgb[:, :, 1].sum() / cloth_pixels_cnt,
+                             cloth_rgb[:, :, 2].sum() / cloth_pixels_cnt]).astype(np.uint8)
+    print("mean:", mean_rgb_val)
+    diff_rgb = cloth_rgb - mean_rgb_val
+    r_pos = (img_rgb[:, :, 0] <= mean_rgb_val[0] - (255 * shadow_ratio) / 2 + offset)
+    g_pos = (img_rgb[:, :, 1] <= mean_rgb_val[1] - (255 * shadow_ratio) + offset)
+    b_pos = (img_rgb[:, :, 2] <= mean_rgb_val[2] - (255 * shadow_ratio) + offset)
+    print("r_pos:", r_pos.shape, r_pos.sum() / (h * w))
+    print("g_pos:", g_pos.shape, g_pos.sum() / (h * w))
+    print("b_pos:", b_pos.shape, b_pos.sum() / (h * w))
+
+    r_mask = np.zeros_like(img_gray).astype(np.float32)
+    g_mask = np.zeros_like(img_gray).astype(np.float32)
+    b_mask = np.zeros_like(img_gray).astype(np.float32)
+    r_mask[r_pos] = 1
+    g_mask[g_pos] = 1
+    b_mask[b_pos] = 1
+    mean_mask = ((r_mask == 1) & (g_mask == 1) & (b_mask == 1)).astype(np.float32)
+    mean_mask = mean_mask * cloth_mask
+    mean_mask = np.concatenate([mean_mask,
+                                mean_mask,
+                                mean_mask], axis=-1)
+    mean_mask = cv2.GaussianBlur(mean_mask, ksize=(11, 11), sigmaX=10)
+    print("mean_mask:", mean_mask.shape, mean_mask.min(), mean_mask.max())
+    mean_mask_vis = (mean_mask * 255.).clip(0, 255).astype(np.uint8)
+    # mean_max_val = cloth_rgb[mean_mask > 0.].max()
+    # print("mean_max:", mean_max_val)
+
+    ''' relighting '''
+    img_relight = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
+    v_channel = img_relight[:, :, 2]
+    print("v_channel", v_channel.min(), v_channel.max())
+    v_relight = cv2.addWeighted(v_channel, 1 + relighting_ratio, np.zeros(v_channel.shape, v_channel.dtype), 0, 0)
+    # v_relight = v_channel + (((255 - v_channel) / 255) ** 2) * 255 * relighting_ratio
+    img_relight[:, :, 2] = v_relight
+    img_relight = cv2.cvtColor(img_relight, cv2.COLOR_HSV2RGB)
+
+    # img_relight = img_rgb + (((255 - img_gray) / 255) ** 2) * 255. * relighting_ratio
+
+    img_final = mean_mask * img_relight + (1 - mean_mask) * img_rgb
+    img_relight = img_relight.clip(0, 255).astype(np.uint8)
+    img_final = img_final.clip(0, 255).astype(np.uint8)
+    img_diff = (img_relight - img_rgb).astype(np.uint8)
+
+    img_mean_diff = (img_rgb - mean_rgb_val).astype(np.float32)
+    img_mean_diff = ((img_mean_diff - img_mean_diff.mean()) / (img_mean_diff.max() - img_mean_diff.min()) * 255).astype(
+        np.uint8)
+
+    ''' post-process: downsample + gaussian blur '''
+    img_final_down = np.array(Image.fromarray(img_final).resize((w // 2, h // 2)).resize((w, h)))
+    img_final_down = cv2.GaussianBlur(img_final_down, ksize=(gauss_kernel, gauss_kernel), sigmaX=3)
+    # img_final_down = np.array(Image.fromarray(img_final_down).resize((w, h)))
+    img_final = img_final_down
+
+    return img_final
+
+
 class NdarrayEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, np.ndarray):

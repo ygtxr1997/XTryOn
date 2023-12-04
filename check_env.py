@@ -271,23 +271,27 @@ def check_mgd():
 
     test_weight_path = "/cfs/yuange/code/XTryOn/lightning_logs/mgd/2023_11_17T15_44_47/checkpoints/epoch=99-step=112000.ckpt"
 
-    from models.generate.image_infer import mgd
-    model = mgd(
-        in_channels=28 + 4,
-        out_channels=4 + 1,
-        pretrained=True,
-        weight_path=None,
-    )
-
-    # from models.generate.image_infer import MGDBatchInfer
-    # model_img = Image.open("samples/shirt_long_person.png")
-    # model_rgb = np.array(model_img)
-    # test_prompt = "a cropped top with red and black stripes"
-    # mgd_infer = MGDBatchInfer(
-    #     unet_in_channels=28 + 4,
-    #     unet_weight_path=test_weight_path
+    # from models.generate.image_infer import mgd
+    # model = mgd(
+    #     in_channels=28 + 4,
+    #     out_channels=4 + 1,
+    #     pretrained=True,
+    #     weight_path=None,
     # )
-    # mgd_infer.forward_rgb_as_pil(model_rgb, test_prompt, model_rgb)
+
+    from models.generate.image_infer import MGDBatchInfer
+    infer_width, infer_height = 768, 1024
+    model_img = Image.open("samples/ufo_ori.png").resize((infer_width, infer_height))
+    model_rgb = np.array(model_img)
+    warped_rgb = np.array(Image.open("samples/ufo_warped.png"))
+    test_prompt = "a t-shirt with red logo, happy weekend texts"
+    mgd_infer = MGDBatchInfer(
+        infer_height=infer_height,
+        infer_width=infer_width,
+        unet_in_channels=28 + 4,
+        unet_weight_path=test_weight_path
+    )
+    mgd_infer.forward_rgb_as_pil(model_rgb, test_prompt, warped_rgb)
 
 
 def check_blip2():
@@ -332,7 +336,7 @@ def check_processed_dataset():
         debug_len=10,
         output_keys=(
             "person", "densepose", "inpaint_mask", "pose_map", "warped_person",
-            "pidinet", "blip2_cloth", "person_fn"
+            "pidinet", "blip2_cloth", "person_fn", "deshadow"
         )
     )
 
@@ -387,6 +391,51 @@ def check_vis_point():
     print(len(pils))
 
 
+def check_ddim_inversion():
+    from diffusers.schedulers import DDIMInverseScheduler, DDIMScheduler
+    from diffusers.models import UNet2DModel
+    sc = DDIMInverseScheduler(
+        beta_end=0.012,
+        beta_schedule="scaled_linear",
+        beta_start=0.00085,
+        clip_sample=False,
+        num_train_timesteps=1000,
+        set_alpha_to_one=False,
+        steps_offset=1 + 20,
+        trained_betas=None,
+    )
+    sc.set_timesteps(50)
+    print(sc.timesteps)
+
+    s0 = DDIMScheduler.from_pretrained("pretrained/stable-diffusion-inpainting/scheduler")
+    s0.set_timesteps(50)
+    print(s0.timesteps)
+
+
+def check_divide():
+    from models.generate.image_infer import MGDBatchInfer
+    from torchvision.transforms import transforms
+    infer_width, infer_height = 768, 1024
+    model_img = Image.open("samples/ufo_ori.png").resize((infer_width, infer_height))
+    model_rgb = np.array(model_img).astype(np.float32)
+    warped_rgb = np.array(Image.open("samples/ufo_warped.png").resize((infer_width, infer_height))).astype(np.float32)
+    res = (model_rgb + 1) / (warped_rgb + 1)
+    print(res.min(), res.max(), res.mean())
+    scale = 255. / res.max()
+    res = res * scale
+    Image.fromarray(res.astype(np.uint8)).save("tmp_divide.png")
+
+    # disturb
+    h, w, c = res.shape
+    # res += np.random.randn(h, w, c)
+    trans = transforms.RandomResizedCrop((h, w))
+    res_disturb = trans(Image.fromarray(res.astype(np.uint8)))
+    res_disturb.save("tmp_divide_disturb.png")
+    res = res_disturb
+    res = ((res / scale) * (warped_rgb + 1) - 1).clip(0, 255).astype(np.uint8)
+    Image.fromarray(res.astype(np.uint8)).save("tmp_divide_mul_back.png")
+
+
 if __name__ == "__main__":
     # check_m2fp()
     # check_dwpose()
@@ -403,3 +452,5 @@ if __name__ == "__main__":
     check_processed_dataset()
     # check_gen_file_list()
     # check_vis_point()
+    # check_ddim_inversion()
+    # check_divide()

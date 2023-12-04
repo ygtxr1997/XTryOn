@@ -11,7 +11,7 @@ from diffusers.utils import is_accelerate_available
 from diffusers.configuration_utils import FrozenDict
 from diffusers.models import AutoencoderKL, UNet2DConditionModel
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
-from diffusers.schedulers import DDIMScheduler, LMSDiscreteScheduler, PNDMScheduler
+from diffusers.schedulers import DDIMScheduler, LMSDiscreteScheduler, PNDMScheduler, DDIMInverseScheduler
 from diffusers.utils import deprecate
 from diffusers.pipelines.stable_diffusion.pipeline_output import StableDiffusionPipelineOutput
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion_inpaint import prepare_mask_and_masked_image
@@ -124,6 +124,19 @@ class MGDPipe(DiffusionPipeline):
             new_config["sample_size"] = 64
             unet._internal_dict = FrozenDict(new_config)
 
+        ''' for ddim inversion '''
+        inv_scheduler = DDIMInverseScheduler(
+            beta_end=0.012,
+            beta_schedule="scaled_linear",
+            beta_start=0.00085,
+            clip_sample=False,
+            num_train_timesteps=1000,
+            set_alpha_to_one=False,
+            steps_offset=1,
+            trained_betas=None,
+        )
+        inv_scheduler.set_timesteps(50)
+
         self.register_modules(
             vae=vae,
             text_encoder=text_encoder,
@@ -132,6 +145,7 @@ class MGDPipe(DiffusionPipeline):
             scheduler=scheduler,
             safety_checker=safety_checker,
             feature_extractor=feature_extractor,
+            inv_scheduler=inv_scheduler,
         )
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         self.register_to_config(requires_safety_checker=requires_safety_checker)
@@ -408,6 +422,76 @@ class MGDPipe(DiffusionPipeline):
         masked_image_latents = masked_image_latents.to(device=device, dtype=dtype)
         return mask, masked_image_latents
 
+    def vae_encode_decode(
+            self,
+            image: Union[torch.FloatTensor, PIL.Image.Image],
+            generator: torch.Generator = None,
+    ):
+        # Only for debug
+        image_latents = self.vae.encode(image).latent_dist.sample(generator=generator)
+        image_latents = 0.18215 * image_latents
+        print(image_latents.shape)
+        image = self.decode_latents(image_latents)
+
+        # 13. Convert to PIL
+        pils = self.numpy_to_pil(image)
+        for pil in pils:
+            pil.save("tmp_vae_enc_dec.png")
+        exit()
+
+    def ddim_inversion_loop(
+            self,
+            latents: torch.Tensor,
+            extra_unet_inputs: torch.Tensor,
+            context: torch.Tensor,
+            num_inference_steps: int = 50,
+            do_classifier_free_guidance: bool = True,
+            guidance_scale: float = 7.5,
+            max_noise_step: int = None,
+    ):
+        device = latents.device
+        self.inv_scheduler.set_timesteps(num_inference_steps, device=device)
+        timesteps = self.inv_scheduler.timesteps
+
+        if do_classifier_free_guidance:
+            # 1st half batch is uncond, 2nd half is cond
+            latents = latents.chunk(2)[1]
+            extra_unet_inputs = torch.cat([extra_unet_inputs.chunk(2)[1]] * 2)
+            context = torch.cat([context.chunk(2)[1]] * 2)
+
+        print("DDIM Inversion...")
+        if max_noise_step is not None:
+            timesteps = timesteps[:max_noise_step]
+        print(timesteps, len(timesteps))
+        with self.progress_bar(total=num_inference_steps) as progress_bar:
+            for i, t in enumerate(timesteps):
+                # expand the latents if we are doing classifier free guidance
+                latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
+
+                # concat latents, mask, masked_image_latents in the channel dimension
+                latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+                latent_model_input = torch.cat(
+                    [latent_model_input, extra_unet_inputs],
+                    dim=1)
+
+                # predict the noise residual
+                noise_pred = self.unet(latent_model_input, t, encoder_hidden_states=context).sample
+
+                # perform guidance
+                if do_classifier_free_guidance:
+                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+                latents = self.inv_scheduler.step(noise_pred, t, latents).prev_sample.to(self.vae.dtype)
+
+                # call the callback, if provided
+                if i == len(timesteps) - 1 or ((i + 1) % self.scheduler.order == 0):
+                    progress_bar.update()
+
+        # 11. Post-processing
+        image = self.decode_latents(latents)
+        return latents, image
+
     @torch.no_grad()
     def __call__(
             self,
@@ -433,6 +517,7 @@ class MGDPipe(DiffusionPipeline):
             sketch_cond_rate: float = 1.0,
             start_cond_rate: float = 0,
             no_pose: bool = False,
+            use_ddim_inversion: bool = False,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -518,6 +603,7 @@ class MGDPipe(DiffusionPipeline):
 
         # 4. Preprocess mask, image and posemap
         mask, masked_image = prepare_mask_and_masked_image(image, mask_image, height=height, width=width)
+        _, full_image = prepare_mask_and_masked_image(image, torch.zeros_like(mask), height=height, width=width)
         pose_map = torch.nn.functional.interpolate(
             pose_map, size=(pose_map.shape[2] // 8, pose_map.shape[3] // 8), mode="bilinear"
         )
@@ -555,7 +641,18 @@ class MGDPipe(DiffusionPipeline):
             latents,
         )
 
-        # 7. Prepare mask latent variables
+        # 7. Prepare mask latent variables and original latent
+        _, image_latents = self.prepare_mask_latents(
+            torch.zeros_like(mask),
+            full_image,
+            batch_size * num_images_per_prompt,
+            height,
+            width,
+            text_embeddings.dtype,
+            device,
+            generator,
+            do_classifier_free_guidance,
+        )
         mask, masked_image_latents = self.prepare_mask_latents(
             mask,
             masked_image,
@@ -598,9 +695,28 @@ class MGDPipe(DiffusionPipeline):
 
         # 9. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
+        max_noise_step = int(1.0 * num_inference_steps)  # default: 0.4
+
+        # 9.a DDIM Inversion
+        if use_ddim_inversion:
+            latents, noisy_rgb = self.ddim_inversion_loop(
+                image_latents,
+                torch.cat([mask, masked_image_latents, pose_map.to(mask.dtype),
+                     sketch.to(mask.dtype), warped], dim=1),
+                text_embeddings,
+                num_inference_steps=num_inference_steps,
+                do_classifier_free_guidance=do_classifier_free_guidance,
+                guidance_scale=guidance_scale,
+                max_noise_step=max_noise_step,
+            )
+            noisy_pils = self.numpy_to_pil(noisy_rgb)
+            for idx, pil in enumerate(noisy_pils):
+                pil.save(f"tmp_ddim_noised_{idx:03d}.png")
 
         # 10. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
+        timesteps = timesteps[-max_noise_step:] if max_noise_step > 0 else []
+        print(timesteps, len(timesteps))
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 # expand the latents if we are doing classifier free guidance

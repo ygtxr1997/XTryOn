@@ -23,10 +23,12 @@ class ModelHolder(object):
 
     def _load_models(self):
         if self.mgd_infer is None:
-            test_weight_path = "/cfs/yuange/code/XTryOn/lightning_logs/mgd/2023_11_17T15_44_47/checkpoints/epoch=99-step=112000.ckpt"
+            test_weight_path = "/cfs/yuange/code/XTryOn/lightning_logs/mgd/2023_12_01T19_06_03/checkpoints/epoch=99-step=36300.ckpt"
             self.mgd_infer = MGDBatchInfer(
                 unet_in_channels=28 + 4,
-                unet_weight_path=test_weight_path
+                unet_weight_path=test_weight_path,
+                infer_height=512,
+                infer_width=384,
             )
 
     def _reload_mgd(self, ckpt_path: str):
