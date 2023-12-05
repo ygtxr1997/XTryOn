@@ -23,12 +23,12 @@ class ModelHolder(object):
 
     def _load_models(self):
         if self.mgd_infer is None:
-            test_weight_path = "/cfs/yuange/code/XTryOn/lightning_logs/mgd/2023_12_01T19_06_03/checkpoints/epoch=99-step=36300.ckpt"
+            test_weight_path = "/cfs/yuange/code/XTryOn/lightning_logs/mgd/2023_12_04T12_43_20/checkpoints/epoch=29-step=10890.ckpt"
             self.mgd_infer = MGDBatchInfer(
                 unet_in_channels=28 + 4,
                 unet_weight_path=test_weight_path,
-                infer_height=512,
-                infer_width=384,
+                infer_height=1024,
+                infer_width=768,
             )
 
     def _reload_mgd(self, ckpt_path: str):
@@ -40,7 +40,11 @@ class ModelHolder(object):
         #     self._reload_mgd(ckpt_path=ckpt_path)
         self._load_models()
 
-        gen_pils = self.mgd_infer.forward_rgb_as_pil(img_cloth, text_cloth, img_warped)
+        gen_pils = self.mgd_infer.forward_rgb_as_pil(
+            img_cloth, text_cloth, img_warped,
+            num_samples=2,
+            num_inference_steps=20,
+        )
 
         gen_vis = [np.array(pil).astype(np.uint8) for pil in gen_pils]
         return gen_vis

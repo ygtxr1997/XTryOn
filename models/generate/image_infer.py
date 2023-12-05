@@ -56,6 +56,7 @@ class MGDBatchInfer(object):
                            prompt: str,
                            warped_rgb: np.ndarray = None,
                            num_samples: int = 4,
+                           num_inference_steps: int = 50,
                            seed: int = 42,
                            ):
         height, width = self.infer_height, self.infer_width
@@ -150,6 +151,7 @@ class MGDBatchInfer(object):
             sketch=sketch_input,
             height=height,
             width=width,
+            num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
             num_images_per_prompt=num_samples,
             generator=generator,

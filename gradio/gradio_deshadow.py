@@ -91,6 +91,7 @@ def de_shadow(img_rgb: np.ndarray,
               offset: int = 20,
               shadow_ratio: float = 0.5,
               relighting_ratio: float = 0.1,
+              down_sample: bool = False,
               gauss_kernel: int = 3,
               ):
     """ """
@@ -103,6 +104,8 @@ def de_shadow(img_rgb: np.ndarray,
     img_gray = np.array(Image.fromarray(img_rgb).convert("L"))[:, :, np.newaxis]
 
     parse_cloth_labels = [5, 6, 7]
+    bg_mask = (parse_seg == 0).astype(np.float32)[:, :, np.newaxis]
+    img_fg_rgb = ((1 - bg_mask) * img_rgb).clip(0, 255).astype(np.uint8)
     cloth_mask = (parse_seg == 5).astype(np.float32) + \
                  (parse_seg == 6).astype(np.float32) + \
                  (parse_seg == 7).astype(np.float32)
@@ -162,12 +165,15 @@ def de_shadow(img_rgb: np.ndarray,
     img_mean_diff = ((img_mean_diff - img_mean_diff.mean()) / (img_mean_diff.max() - img_mean_diff.min()) * 255).astype(np.uint8)
 
     ''' post-process: downsample + gaussian blur '''
-    img_final_down = np.array(Image.fromarray(img_final).resize((w // 2, h // 2)).resize((w, h)))
-    img_final_down = cv2.GaussianBlur(img_final_down, ksize=(gauss_kernel, gauss_kernel), sigmaX=3)
-    # img_final_down = np.array(Image.fromarray(img_final_down).resize((w, h)))
-    img_final = img_final_down
+    if down_sample:
+        img_final_down = np.array(Image.fromarray(img_final).resize((w // 2, h // 2)).resize((w, h)))
+        img_final_down = cv2.GaussianBlur(img_final_down, ksize=(gauss_kernel, gauss_kernel), sigmaX=3)
+        img_final = img_final_down
 
-    return [img_rgb, img_relight, img_diff, img_final, img_mean_diff, cloth_mask_vis, cloth_rgb, mean_mask_vis]
+    return [img_rgb, img_relight, img_diff,
+            img_final, img_mean_diff,
+            cloth_mask_vis, cloth_rgb, mean_mask_vis,
+            img_fg_rgb]
 
 
 if __name__ == "__main__":
@@ -182,6 +188,7 @@ if __name__ == "__main__":
                     offset_input = gr.Slider(label="offset", minimum=0, maximum=200, value=20, step=1)
                     shadow_ratio_input = gr.Slider(label="shadow_ratio", minimum=0., maximum=1., value=0.05, step=0.01)
                     relighting_ratio_input = gr.Slider(label="relight_ratio", minimum=0., maximum=2., value=.1, step=0.01)
+                    down_sample_input = gr.Checkbox(label="down_sample", value=False)
                     gauss_kernel_input = gr.Slider(label="gauss_kernel", minimum=1, maximum=21, value=3, step=2)
                 with gr.Column(scale=2):
                     image_output = gr.Gallery(label='output', show_label=False, elem_id="gallery").style(grid=2, height='auto')
@@ -190,7 +197,7 @@ if __name__ == "__main__":
         image_button.click(
             de_shadow,
             inputs=[image1_input, parse_input, offset_input, shadow_ratio_input, relighting_ratio_input,
-                    gauss_kernel_input],
+                    down_sample_input, gauss_kernel_input],
             outputs=[image_output],
         )
 
