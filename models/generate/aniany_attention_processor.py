@@ -18,10 +18,10 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from ..utils import deprecate, logging
-from ..utils.import_utils import is_xformers_available
-from ..utils.torch_utils import maybe_allow_in_graph
-from .lora import LoRACompatibleLinear, LoRALinearLayer
+from diffusers.utils import deprecate, logging
+from diffusers.utils.import_utils import is_xformers_available
+from diffusers.utils.torch_utils import maybe_allow_in_graph
+from diffusers.models.lora import LoRACompatibleLinear, LoRALinearLayer
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -905,6 +905,9 @@ class XFormersAttnProcessor:
         attention_mask: Optional[torch.FloatTensor] = None,
         temb: Optional[torch.FloatTensor] = None,
         scale: float = 1.0,
+        ret_kv: bool = False,
+        k_ref: torch.FloatTensor = None,
+        v_ref: torch.FloatTensor = None,
     ):
         residual = hidden_states
 
@@ -949,6 +952,15 @@ class XFormersAttnProcessor:
         key = attn.head_to_batch_dim(key).contiguous()
         value = attn.head_to_batch_dim(value).contiguous()
 
+        out_k, out_v = None, None
+        if ret_kv:
+            out_k = key
+            out_v = value
+
+        if k_ref is not None and v_ref is not None:
+            key = torch.cat([key, k_ref], dim=1)
+            value = torch.cat([value, v_ref], dim=1)
+
         hidden_states = xformers.ops.memory_efficient_attention(
             query, key, value, attn_bias=attention_mask, op=self.attention_op, scale=attn.scale
         )
@@ -968,7 +980,7 @@ class XFormersAttnProcessor:
 
         hidden_states = hidden_states / attn.rescale_output_factor
 
-        return hidden_states
+        return hidden_states, out_k, out_v
 
 
 class AttnProcessor2_0:

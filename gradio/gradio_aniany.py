@@ -9,7 +9,7 @@ import gradio as gr
 import torch
 
 from models import (
-    MGDBatchInfer,
+    AniAnyBatchInfer,
 )
 
 
@@ -24,7 +24,7 @@ class ModelHolder(object):
     def _load_models(self):
         if self.mgd_infer is None:
             test_weight_path = "/cfs/yuange/code/XTryOn/lightning_logs/mgd/2023_12_04T12_43_20/checkpoints/epoch=29-step=10890.ckpt"
-            self.mgd_infer = MGDBatchInfer(
+            self.mgd_infer = AniAnyBatchInfer(
                 unet_in_channels=28 + 4,
                 unet_weight_path=test_weight_path,
                 infer_height=512,
@@ -32,7 +32,7 @@ class ModelHolder(object):
             )
 
     def _reload_mgd(self, ckpt_path: str):
-        self.mgd_infer = MGDBatchInfer()
+        self.mgd_infer = AniAnyBatchInfer()
 
     def run(self, img_cloth, img_warped, text_cloth,
             use_reload: bool = False, ckpt_path: str = None):

@@ -42,7 +42,14 @@ from diffusers.models.embeddings import (
     Timesteps,
 )
 from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.unet_2d_blocks import (
+# from diffusers.models.unet_2d_blocks import (
+#     UNetMidBlock2DCrossAttn,
+#     UNetMidBlock2DSimpleCrossAttn,
+#     get_down_block,
+#     get_up_block,
+# )  # customized
+
+from .aniany_unet_2d_blocks import (
     UNetMidBlock2DCrossAttn,
     UNetMidBlock2DSimpleCrossAttn,
     get_down_block,
@@ -64,6 +71,8 @@ class UNet2DConditionOutput(BaseOutput):
     """
 
     sample: torch.FloatTensor = None
+    all_sa_ks: List[torch.FloatTensor] = None
+    all_sa_vs: List[torch.FloatTensor] = None
 
 
 class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin):
@@ -747,6 +756,9 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         mid_block_additional_residual: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
         return_dict: bool = True,
+        ret_kv: bool = False,
+        in_k_refs: List[torch.FloatTensor] = None,
+        in_v_refs: List[torch.FloatTensor] = None,
     ) -> Union[UNet2DConditionOutput, Tuple]:
         r"""
         The [`UNet2DConditionModel`] forward method.
@@ -947,28 +959,45 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         is_controlnet = mid_block_additional_residual is not None and down_block_additional_residuals is not None
         is_adapter = mid_block_additional_residual is None and down_block_additional_residuals is not None
 
+        all_sa_ks, all_sa_vs = [], []
         down_block_res_samples = (sample,)
-        for downsample_block in self.down_blocks:
+        ref_cnt = 0
+        if in_k_refs is not None:
+            print("in_k_refs:", [len(ref) for ref in in_k_refs])
+        for idx, downsample_block in enumerate(self.down_blocks):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
                 # For t2i-adapter CrossAttnDownBlock2D
                 additional_residuals = {}
                 if is_adapter and len(down_block_additional_residuals) > 0:
                     additional_residuals["additional_residuals"] = down_block_additional_residuals.pop(0)
+                block_k_refs, block_v_refs = None, None
+                if in_k_refs is not None:
+                    block_k_refs = in_k_refs[ref_cnt]
+                    block_v_refs = in_v_refs[ref_cnt]
+                    ref_cnt += 1
 
-                sample, res_samples = downsample_block(
+                sample, res_samples, sa_ks, sa_vs = downsample_block(
                     hidden_states=sample,
                     temb=emb,
                     encoder_hidden_states=encoder_hidden_states,
                     attention_mask=attention_mask,
                     cross_attention_kwargs=cross_attention_kwargs,
                     encoder_attention_mask=encoder_attention_mask,
+                    ret_kv=ret_kv,
+                    in_k_refs=block_k_refs,
+                    in_v_refs=block_v_refs,
                     **additional_residuals,
                 )
             else:
-                sample, res_samples = downsample_block(hidden_states=sample, temb=emb, scale=lora_scale)
+                sample, res_samples, sa_ks, sa_vs = downsample_block(
+                    hidden_states=sample, temb=emb, scale=lora_scale,
+                )
 
                 if is_adapter and len(down_block_additional_residuals) > 0:
                     sample += down_block_additional_residuals.pop(0)
+            print(f"aniany sa_inputs@{idx}:", len(sa_ks))
+            all_sa_ks.append(sa_ks)
+            all_sa_vs.append(sa_vs)
 
             down_block_res_samples += res_samples
 
@@ -1043,6 +1072,6 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         sample = self.conv_out(sample)
 
         if not return_dict:
-            return (sample,)
+            return (sample, all_sa_ks, all_sa_vs)
 
-        return UNet2DConditionOutput(sample=sample)
+        return UNet2DConditionOutput(sample=sample, all_sa_ks=all_sa_ks, all_sa_vs=all_sa_vs)

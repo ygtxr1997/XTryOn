@@ -78,7 +78,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
         attention_head_dim: int = 88,
         in_channels: Optional[int] = None,
         out_channels: Optional[int] = None,
-        num_layers: int = 1,
+        num_layers: int = 1,  # 1 for aniany
         dropout: float = 0.0,
         norm_num_groups: int = 32,
         cross_attention_dim: Optional[int] = None,
@@ -97,14 +97,14 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
         attention_type: str = "default",
     ):
         super().__init__()
-        self.use_linear_projection = use_linear_projection
+        self.use_linear_projection = use_linear_projection  # False for aniany
         self.num_attention_heads = num_attention_heads
         self.attention_head_dim = attention_head_dim
         inner_dim = num_attention_heads * attention_head_dim
 
         # 1. Transformer2DModel can process both standard continuous images of shape `(batch_size, num_channels, width, height)` as well as quantized image embeddings of shape `(batch_size, num_image_vectors)`
         # Define whether input is continuous or discrete depending on configuration
-        self.is_input_continuous = (in_channels is not None) and (patch_size is None)
+        self.is_input_continuous = (in_channels is not None) and (patch_size is None)  # True for aniany
         self.is_input_vectorized = num_vector_embeds is not None
         self.is_input_patches = in_channels is not None and patch_size is not None
 
@@ -189,7 +189,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
                     norm_type=norm_type,
                     norm_elementwise_affine=norm_elementwise_affine,
                     attention_type=attention_type,
-                )
+                )  # SA + CA + FF
                 for d in range(num_layers)
             ]
         )
@@ -222,6 +222,9 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
         attention_mask: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
         return_dict: bool = True,
+        in_k_ref: torch.Tensor = None,
+        in_v_ref: torch.Tensor = None,
+        ret_kv: bool = False,
     ):
         """
         The [`Transformer2DModel`] forward method.
@@ -280,6 +283,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
         lora_scale = cross_attention_kwargs.get("scale", 1.0) if cross_attention_kwargs is not None else 1.0
 
         # 1. Input
+        height, width = None, None
         if self.is_input_continuous:
             batch, _, height, width = hidden_states.shape
             residual = hidden_states
@@ -299,10 +303,13 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
         elif self.is_input_patches:
             hidden_states = self.pos_embed(hidden_states)
 
+        # ret_sa_input = hidden_states  # (B,H*W,C)
+        # print("debug 01 after proj:", hidden_states.shape)
+
         # 2. Blocks
         for block in self.transformer_blocks:
             if self.training and self.gradient_checkpointing:
-                hidden_states = torch.utils.checkpoint.checkpoint(
+                hidden_states, ret_k, ret_v = torch.utils.checkpoint.checkpoint(
                     block,
                     hidden_states,
                     attention_mask,
@@ -311,10 +318,13 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
                     timestep,
                     cross_attention_kwargs,
                     class_labels,
+                    in_k_ref,
+                    in_v_ref,
+                    ret_kv,
                     use_reentrant=False,
                 )
             else:
-                hidden_states = block(
+                hidden_states, ret_k, ret_v = block(
                     hidden_states,
                     attention_mask=attention_mask,
                     encoder_hidden_states=encoder_hidden_states,
@@ -322,7 +332,11 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
                     timestep=timestep,
                     cross_attention_kwargs=cross_attention_kwargs,
                     class_labels=class_labels,
+                    in_k_ref=in_k_ref,
+                    in_v_ref=in_v_ref,
+                    ret_kv=ret_kv,
                 )
+            # print("debug 02 after block:", hidden_states.shape)
 
         # 3. Output
         if self.is_input_continuous:
@@ -361,7 +375,9 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
                 shape=(-1, self.out_channels, height * self.patch_size, width * self.patch_size)
             )
 
+        # print("debug 03 after output:", output.shape)
+
         if not return_dict:
-            return (output,)
+            return (output, ret_k, ret_v)  # ret_k/v maybe None if ret_kv=False
 
         return Transformer2DModelOutput(sample=output)

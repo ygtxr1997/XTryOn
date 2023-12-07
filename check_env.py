@@ -436,6 +436,47 @@ def check_divide():
     Image.fromarray(res.astype(np.uint8)).save("tmp_divide_mul_back.png")
 
 
+def check_aniany():
+    from models.generate.aniany import ConditionFCN
+    net = ConditionFCN()
+    pose_cond = torch.randn(4, 3, 512, 384)
+    out = net(pose_cond)
+    print(out.shape)
+
+    # from models.generate.aniany import FrozenCLIPTextImageEmbedder
+    # net = FrozenCLIPTextImageEmbedder()
+    # source_img = torch.randn(4, 3, 224, 224)
+    # out = net.encode({"image": source_img, "text": [""]})
+    # print(out.shape)
+
+    def cat_width_in_transformer(x1: torch.Tensor, x2: torch.Tensor, height: int, width: int):
+        assert x1.shape == x2.shape
+        batch_size, hw, channels = x1.shape
+        assert hw == height * width
+        x1 = x1.permute(0, 2, 1).reshape(batch_size, channels, height, width)
+        x2 = x2.permute(0, 2, 1).reshape(batch_size, channels, height, width)
+        x_cat = torch.cat([x1, x2], dim=-1)
+        x_cat = x_cat.permute(0, 2, 3, 1).reshape(batch_size, height * width * 2, channels)
+        return x_cat
+
+    def chunk_width_in_transformer(x_cat: torch.Tensor, height: int, width: int, chunk_num: int = 2, keep_num: int = 0):
+        batch_size, hw, channels = x_cat.shape
+        assert hw == height * width * chunk_num
+        x_cat = x_cat.permute(0, 2, 1).reshape(batch_size, channels, height, width * 2)
+        x_0 = x_cat.chunk(chunk_num, dim=-1)[keep_num]
+        x_0 = x_0.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
+        return x_0
+
+    # h, w = 4, 3
+    # x_ref = torch.ones((2, h * w, 4)) * 2
+    # x_main = torch.ones((2, h * w, 4)) * 3
+    # x_cat = cat_width_in_transformer(x_main, x_ref, height=h, width=w)
+    # print(x_cat.shape)
+    # x_main = chunk_width_in_transformer(x_cat, h, w)
+    # print(x_main.shape)
+    # print(x_main)
+
+
 if __name__ == "__main__":
     # check_m2fp()
     # check_dwpose()
@@ -449,8 +490,9 @@ if __name__ == "__main__":
     # check_mgd()
     # check_blip2()
     # check_json()
-    check_processed_dataset()
+    # check_processed_dataset()
     # check_gen_file_list()
     # check_vis_point()
     # check_ddim_inversion()
     # check_divide()
+    check_aniany()

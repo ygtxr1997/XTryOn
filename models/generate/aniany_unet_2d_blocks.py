@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 
 import numpy as np
 import torch
@@ -957,7 +957,7 @@ class CrossAttnDownBlock2D(nn.Module):
         out_channels: int,
         temb_channels: int,
         dropout: float = 0.0,
-        num_layers: int = 1,
+        num_layers: int = 1,  # 2 for aniany
         transformer_layers_per_block: int = 1,
         resnet_eps: float = 1e-6,
         resnet_time_scale_shift: str = "default",
@@ -1049,12 +1049,20 @@ class CrossAttnDownBlock2D(nn.Module):
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         additional_residuals=None,
+        ret_kv: bool = False,
+        in_k_refs: List[torch.FloatTensor] = None,
+        in_v_refs: List[torch.FloatTensor] = None,
     ):
         output_states = ()
 
         lora_scale = cross_attention_kwargs.get("scale", 1.0) if cross_attention_kwargs is not None else 1.0
 
         blocks = list(zip(self.resnets, self.attentions))
+        if in_k_refs is None:
+            in_k_refs = [None] * len(blocks)
+            in_v_refs = [None] * len(blocks)
+        ret_ks = []
+        ret_vs = []
 
         for i, (resnet, attn) in enumerate(blocks):
             if self.training and self.gradient_checkpointing:
@@ -1075,24 +1083,35 @@ class CrossAttnDownBlock2D(nn.Module):
                     temb,
                     **ckpt_kwargs,
                 )
-                hidden_states = attn(
+                hidden_states, ret_k, ret_v = attn(
                     hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     cross_attention_kwargs=cross_attention_kwargs,
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     return_dict=False,
-                )[0]
+                    ret_kv=ret_kv,
+                    in_k_ref=in_k_refs[i],
+                    in_v_ref=in_v_refs[i],
+                )
             else:
                 hidden_states = resnet(hidden_states, temb, scale=lora_scale)
-                hidden_states = attn(
+                hidden_states, ret_k, ret_v = attn(
                     hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     cross_attention_kwargs=cross_attention_kwargs,
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     return_dict=False,
-                )[0]
+                    ret_kv=ret_kv,
+                    in_k_ref=in_k_refs[i],
+                    in_v_ref=in_v_refs[i],
+                )
+
+            if ret_kv:
+                print("ret_k/v:", ret_k.shape, ret_v.shape)
+                ret_ks.append(ret_k)
+                ret_vs.append(ret_v)
 
             # apply additional residuals to the output of the last pair of resnet and attention blocks
             if i == len(blocks) - 1 and additional_residuals is not None:
@@ -1106,7 +1125,7 @@ class CrossAttnDownBlock2D(nn.Module):
 
             output_states = output_states + (hidden_states,)
 
-        return hidden_states, output_states
+        return hidden_states, output_states, ret_ks, ret_vs
 
 
 class DownBlock2D(nn.Module):
@@ -1161,7 +1180,7 @@ class DownBlock2D(nn.Module):
 
         self.gradient_checkpointing = False
 
-    def forward(self, hidden_states, temb=None, scale: float = 1.0):
+    def forward(self, hidden_states, temb=None, scale: float = 1.0, **kwargs):
         output_states = ()
 
         for resnet in self.resnets:
@@ -1192,7 +1211,7 @@ class DownBlock2D(nn.Module):
 
             output_states = output_states + (hidden_states,)
 
-        return hidden_states, output_states
+        return hidden_states, output_states, [], []
 
 
 class DownEncoderBlock2D(nn.Module):

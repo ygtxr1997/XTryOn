@@ -19,9 +19,11 @@ from torch import nn
 
 from diffusers.utils.torch_utils import maybe_allow_in_graph
 from diffusers.models.activations import get_activation
-from diffusers.models.attention_processor import Attention
+# from diffusers.models.attention_processor import Attention  # customized
 from diffusers.models.embeddings import CombinedTimestepLabelEmbeddings
 from diffusers.models.lora import LoRACompatibleLinear
+
+from .aniany_attention_processor import Attention
 
 
 @maybe_allow_in_graph
@@ -175,6 +177,9 @@ class BasicTransformerBlock(nn.Module):
         timestep: Optional[torch.LongTensor] = None,
         cross_attention_kwargs: Dict[str, Any] = None,
         class_labels: Optional[torch.LongTensor] = None,
+        in_k_ref: Optional[torch.FloatTensor] = None,
+        in_v_ref: Optional[torch.FloatTensor] = None,
+        ret_kv: bool = False,
     ):
         # Notice that normalization is always applied before the real computation in the following blocks.
         # 0. Self-Attention
@@ -194,10 +199,13 @@ class BasicTransformerBlock(nn.Module):
         cross_attention_kwargs = cross_attention_kwargs.copy() if cross_attention_kwargs is not None else {}
         gligen_kwargs = cross_attention_kwargs.pop("gligen", None)
 
-        attn_output = self.attn1(
+        attn_output, ret_k, ret_v = self.attn1(
             norm_hidden_states,
             encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
             attention_mask=attention_mask,
+            ret_kv=ret_kv,
+            k_ref=in_k_ref,
+            v_ref=in_v_ref,
             **cross_attention_kwargs,
         )
         if self.use_ada_layer_norm_zero:
@@ -215,7 +223,7 @@ class BasicTransformerBlock(nn.Module):
                 self.norm2(hidden_states, timestep) if self.use_ada_layer_norm else self.norm2(hidden_states)
             )
 
-            attn_output = self.attn2(
+            attn_output, _, _ = self.attn2(
                 norm_hidden_states,
                 encoder_hidden_states=encoder_hidden_states,
                 attention_mask=encoder_attention_mask,
@@ -252,7 +260,27 @@ class BasicTransformerBlock(nn.Module):
 
         hidden_states = ff_output + hidden_states
 
-        return hidden_states
+        return hidden_states, ret_k, ret_v
+
+    @staticmethod
+    def cat_width_in_transformer(x_main: torch.Tensor, x_ref: torch.Tensor, height: int, width: int):
+        assert x_main.shape == x_ref.shape
+        batch_size, hw, channels = x_main.shape
+        assert hw == height * width
+        x_main = x_main.permute(0, 2, 1).reshape(batch_size, channels, height, width)
+        x_ref = x_ref.permute(0, 2, 1).reshape(batch_size, channels, height, width)
+        x_cat = torch.cat([x_main, x_ref], dim=-1)
+        x_cat = x_cat.permute(0, 2, 3, 1).reshape(batch_size, height * width * 2, channels)
+        return x_cat
+
+    @staticmethod
+    def chunk_width_in_transformer(x_cat: torch.Tensor, height: int, width: int, chunk_num: int = 2, keep_num: int = 0):
+        batch_size, hw, channels = x_cat.shape
+        assert hw == height * width * chunk_num
+        x_cat = x_cat.permute(0, 2, 1).reshape(batch_size, channels, height, width * 2)
+        x_0 = x_cat.chunk(chunk_num, dim=-1)[keep_num]
+        x_0 = x_0.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
+        return x_0
 
 
 class FeedForward(nn.Module):
