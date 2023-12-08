@@ -689,6 +689,7 @@ class AnimateAnyonePL(pl.LightningModule):
         if do_classifier_free_guidance:
             person_gt_latent = torch.cat([person_gt_latent] * 2)
             person_warped_latent = torch.cat([person_warped_latent] * 2)
+            cond_fcn_features = torch.cat([cond_fcn_features] * 2)
 
         ''' unet forward '''
         if self.training:
@@ -738,7 +739,7 @@ class AnimateAnyonePL(pl.LightningModule):
                 print("ref_net:", len(sa_k_ref), sa_k_ref[0][0].dtype)
 
                 # 7.b main net
-                noisy += cond_fcn_features
+                noisy_double += cond_fcn_features
                 model_pred = self.unet_main(
                     noisy_double, t_double,
                     encoder_hidden_states=image_embedding,

@@ -665,10 +665,18 @@ class UNetMidBlock2DCrossAttn(nn.Module):
         attention_mask: Optional[torch.FloatTensor] = None,
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
-    ) -> torch.FloatTensor:
+        ret_kv: bool = False,
+        in_k_refs: List[torch.FloatTensor] = None,
+        in_v_refs: List[torch.FloatTensor] = None,
+    ):
         lora_scale = cross_attention_kwargs.get("scale", 1.0) if cross_attention_kwargs is not None else 1.0
         hidden_states = self.resnets[0](hidden_states, temb, scale=lora_scale)
-        for attn, resnet in zip(self.attentions, self.resnets[1:]):
+        if in_k_refs is None:
+            in_k_refs = [None] * len(self.attentions)
+            in_v_refs = [None] * len(self.attentions)
+        ret_ks = []
+        ret_vs = []
+        for i, (attn, resnet) in enumerate(zip(self.attentions, self.resnets[1:])):
             if self.training and self.gradient_checkpointing:
 
                 def create_custom_forward(module, return_dict=None):
@@ -681,14 +689,17 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                     return custom_forward
 
                 ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
-                hidden_states = attn(
+                hidden_states, ret_k, ret_v = attn(
                     hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     cross_attention_kwargs=cross_attention_kwargs,
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     return_dict=False,
-                )[0]
+                    ret_kv=ret_kv,
+                    in_k_ref=in_k_refs[i],
+                    in_v_ref=in_v_refs[i],
+                )
                 hidden_states = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(resnet),
                     hidden_states,
@@ -696,17 +707,25 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                     **ckpt_kwargs,
                 )
             else:
-                hidden_states = attn(
+                hidden_states, ret_k, ret_v = attn(
                     hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     cross_attention_kwargs=cross_attention_kwargs,
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     return_dict=False,
-                )[0]
+                    ret_kv=ret_kv,
+                    in_k_ref=in_k_refs[i],
+                    in_v_ref=in_v_refs[i],
+                )
                 hidden_states = resnet(hidden_states, temb, scale=lora_scale)
 
-        return hidden_states
+            if ret_kv:
+                print("UNetMidBlock2DCrossAttn ret_k/v:", ret_k.shape, ret_v.shape)
+                ret_ks.append(ret_k)
+                ret_vs.append(ret_v)
+
+        return hidden_states, ret_ks, ret_vs
 
 
 class UNetMidBlock2DSimpleCrossAttn(nn.Module):
@@ -1109,7 +1128,7 @@ class CrossAttnDownBlock2D(nn.Module):
                 )
 
             if ret_kv:
-                print("ret_k/v:", ret_k.shape, ret_v.shape)
+                print("CrossAttnDownBlock2D ret_k/v:", ret_k.shape, ret_v.shape)
                 ret_ks.append(ret_k)
                 ret_vs.append(ret_v)
 
@@ -2209,10 +2228,18 @@ class CrossAttnUpBlock2D(nn.Module):
         upsample_size: Optional[int] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
+        ret_kv: bool = False,
+        in_k_refs: List[torch.FloatTensor] = None,
+        in_v_refs: List[torch.FloatTensor] = None,
     ):
         lora_scale = cross_attention_kwargs.get("scale", 1.0) if cross_attention_kwargs is not None else 1.0
+        if in_k_refs is None:
+            in_k_refs = [None] * len(self.attentions)
+            in_v_refs = [None] * len(self.attentions)
+        ret_ks = []
+        ret_vs = []
 
-        for resnet, attn in zip(self.resnets, self.attentions):
+        for i, (resnet, attn) in enumerate(zip(self.resnets, self.attentions)):
             # pop res hidden states
             res_hidden_states = res_hidden_states_tuple[-1]
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
@@ -2236,30 +2263,41 @@ class CrossAttnUpBlock2D(nn.Module):
                     temb,
                     **ckpt_kwargs,
                 )
-                hidden_states = attn(
+                hidden_states, ret_k, ret_v = attn(
                     hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     cross_attention_kwargs=cross_attention_kwargs,
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     return_dict=False,
-                )[0]
+                    ret_kv=ret_kv,
+                    in_k_ref=in_k_refs[i],
+                    in_v_ref=in_v_refs[i],
+                )
             else:
                 hidden_states = resnet(hidden_states, temb, scale=lora_scale)
-                hidden_states = attn(
+                hidden_states, ret_k, ret_v = attn(
                     hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     cross_attention_kwargs=cross_attention_kwargs,
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     return_dict=False,
-                )[0]
+                    ret_kv=ret_kv,
+                    in_k_ref=in_k_refs[i],
+                    in_v_ref=in_v_refs[i],
+                )
+
+            if ret_kv:
+                print("CrossAttnUpBlock2D ret_k/v:", ret_k.shape, ret_v.shape)
+                ret_ks.append(ret_k)
+                ret_vs.append(ret_v)
 
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:
                 hidden_states = upsampler(hidden_states, upsample_size, scale=lora_scale)
 
-        return hidden_states
+        return hidden_states, ret_ks, ret_vs
 
 
 class UpBlock2D(nn.Module):
@@ -2310,7 +2348,8 @@ class UpBlock2D(nn.Module):
 
         self.gradient_checkpointing = False
 
-    def forward(self, hidden_states, res_hidden_states_tuple, temb=None, upsample_size=None, scale: float = 1.0):
+    def forward(self, hidden_states, res_hidden_states_tuple, temb=None, upsample_size=None, scale: float = 1.0,
+                **kwargs):
         for resnet in self.resnets:
             # pop res hidden states
             res_hidden_states = res_hidden_states_tuple[-1]
@@ -2340,7 +2379,7 @@ class UpBlock2D(nn.Module):
             for upsampler in self.upsamplers:
                 hidden_states = upsampler(hidden_states, upsample_size, scale=scale)
 
-        return hidden_states
+        return hidden_states, [], []
 
 
 class UpDecoderBlock2D(nn.Module):

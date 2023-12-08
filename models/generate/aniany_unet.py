@@ -963,7 +963,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         down_block_res_samples = (sample,)
         ref_cnt = 0
         if in_k_refs is not None:
-            print("in_k_refs:", [len(ref) for ref in in_k_refs])
+            print("UNet in_k_refs:", [len(ref) for ref in in_k_refs])
         for idx, downsample_block in enumerate(self.down_blocks):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
                 # For t2i-adapter CrossAttnDownBlock2D
@@ -995,9 +995,10 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
 
                 if is_adapter and len(down_block_additional_residuals) > 0:
                     sample += down_block_additional_residuals.pop(0)
-            print(f"aniany sa_inputs@{idx}:", len(sa_ks))
-            all_sa_ks.append(sa_ks)
-            all_sa_vs.append(sa_vs)
+            print(f"aniany UNet sa_ks@{ref_cnt}:", len(sa_ks))
+            if len(sa_ks) > 0:
+                all_sa_ks.append(sa_ks)
+                all_sa_vs.append(sa_vs)
 
             down_block_res_samples += res_samples
 
@@ -1014,14 +1015,27 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
 
         # 4. mid
         if self.mid_block is not None:
-            sample = self.mid_block(
+            block_k_refs, block_v_refs = None, None
+            if in_k_refs is not None:
+                block_k_refs = in_k_refs[ref_cnt]
+                block_v_refs = in_v_refs[ref_cnt]
+                ref_cnt += 1
+            sample, sa_ks, sa_vs = self.mid_block(
                 sample,
                 emb,
                 encoder_hidden_states=encoder_hidden_states,
                 attention_mask=attention_mask,
                 cross_attention_kwargs=cross_attention_kwargs,
                 encoder_attention_mask=encoder_attention_mask,
+                ret_kv=ret_kv,
+                in_k_refs=block_k_refs,
+                in_v_refs=block_v_refs,
             )
+            print(f"aniany UNet sa_ks@{ref_cnt}:", len(sa_ks))
+            if len(sa_ks) > 0:
+                all_sa_ks.append(sa_ks)
+                all_sa_vs.append(sa_vs)
+
             # To support T2I-Adapter-XL
             if (
                 is_adapter
@@ -1046,7 +1060,12 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                 upsample_size = down_block_res_samples[-1].shape[2:]
 
             if hasattr(upsample_block, "has_cross_attention") and upsample_block.has_cross_attention:
-                sample = upsample_block(
+                block_k_refs, block_v_refs = None, None
+                if in_k_refs is not None:
+                    block_k_refs = in_k_refs[ref_cnt]
+                    block_v_refs = in_v_refs[ref_cnt]
+                    ref_cnt += 1
+                sample, sa_ks, sa_vs = upsample_block(
                     hidden_states=sample,
                     temb=emb,
                     res_hidden_states_tuple=res_samples,
@@ -1055,15 +1074,22 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                     upsample_size=upsample_size,
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
+                    ret_kv=ret_kv,
+                    in_k_refs=block_k_refs,
+                    in_v_refs=block_v_refs,
                 )
             else:
-                sample = upsample_block(
+                sample, sa_ks, sa_vs = upsample_block(
                     hidden_states=sample,
                     temb=emb,
                     res_hidden_states_tuple=res_samples,
                     upsample_size=upsample_size,
                     scale=lora_scale,
                 )
+            print(f"aniany UNet sa_ks@{ref_cnt}:", len(sa_ks))
+            if len(sa_ks) > 0:
+                all_sa_ks.append(sa_ks)
+                all_sa_vs.append(sa_vs)
 
         # 6. post-process
         if self.conv_norm_out:
