@@ -721,7 +721,7 @@ class UNetMidBlock2DCrossAttn(nn.Module):
                 hidden_states = resnet(hidden_states, temb, scale=lora_scale)
 
             if ret_kv:
-                print("UNetMidBlock2DCrossAttn ret_k/v:", ret_k.shape, ret_v.shape)
+                # print("UNetMidBlock2DCrossAttn ret_k/v:", ret_k.shape, ret_v.shape)
                 ret_ks.append(ret_k)
                 ret_vs.append(ret_v)
 
@@ -1128,7 +1128,7 @@ class CrossAttnDownBlock2D(nn.Module):
                 )
 
             if ret_kv:
-                print("CrossAttnDownBlock2D ret_k/v:", ret_k.shape, ret_v.shape)
+                # print("CrossAttnDownBlock2D ret_k/v:", ret_k.shape, ret_v.shape)
                 ret_ks.append(ret_k)
                 ret_vs.append(ret_v)
 
@@ -2289,7 +2289,7 @@ class CrossAttnUpBlock2D(nn.Module):
                 )
 
             if ret_kv:
-                print("CrossAttnUpBlock2D ret_k/v:", ret_k.shape, ret_v.shape)
+                # print("CrossAttnUpBlock2D ret_k/v:", ret_k.shape, ret_v.shape)
                 ret_ks.append(ret_k)
                 ret_vs.append(ret_v)
 

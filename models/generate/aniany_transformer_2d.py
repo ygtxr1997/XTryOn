@@ -303,9 +303,6 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
         elif self.is_input_patches:
             hidden_states = self.pos_embed(hidden_states)
 
-        # ret_sa_input = hidden_states  # (B,H*W,C)
-        # print("debug 01 after proj:", hidden_states.shape)
-
         # 2. Blocks
         for block in self.transformer_blocks:
             if self.training and self.gradient_checkpointing:
@@ -336,7 +333,6 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
                     in_v_ref=in_v_ref,
                     ret_kv=ret_kv,
                 )
-            # print("debug 02 after block:", hidden_states.shape)
 
         # 3. Output
         if self.is_input_continuous:
@@ -374,8 +370,6 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
             output = hidden_states.reshape(
                 shape=(-1, self.out_channels, height * self.patch_size, width * self.patch_size)
             )
-
-        # print("debug 03 after output:", output.shape)
 
         if not return_dict:
             return (output, ret_k, ret_v)  # ret_k/v maybe None if ret_kv=False

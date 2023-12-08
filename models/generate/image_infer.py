@@ -18,7 +18,7 @@ from third_party import M2FPBatchInfer, DWPoseBatchInfer, PiDiNetBatchInfer
 from tools import kpoint_to_heatmap, get_coco_palette
 
 # aniany used
-from models.generate.aniany import aniany_unet
+from models.generate.aniany import aniany_unet, AnimateAnyonePL
 
 
 class MGDBatchInfer(object):
@@ -481,7 +481,7 @@ class AniAnyBatchInfer(object):
         self.pose_infer = None
         self.edge_infer = None
 
-        ''' mgd models '''
+        ''' aniany models '''
         self.unet_in_channels = unet_in_channels
         self.unet_weight_path = unet_weight_path
         self.unet = None
@@ -489,16 +489,18 @@ class AniAnyBatchInfer(object):
         self.vae = None
         self.tokenizer = None
         self.val_scheduler = None
-        self.mgd_pipe = None
+        self.aniany_pl = None
+        self.ckpt_path = None
 
     @torch.inference_mode()
     def forward_rgb_as_pil(self,
                            model_rgb: np.ndarray,
-                           prompt: str,
+                           prompt: str,  # not used
                            warped_rgb: np.ndarray = None,
                            num_samples: int = 4,
                            num_inference_steps: int = 50,
                            seed: int = 42,
+                           ckpt_path: str = None,
                            ):
         height, width = self.infer_height, self.infer_width
         device = self.device
@@ -554,9 +556,8 @@ class AniAnyBatchInfer(object):
         model_agnostic_rgb = model_down_rgb * (1 - inpaint_mask_arr[:, :, np.newaxis])
         # Image.fromarray(model_agnostic_rgb).save("tmp_04_model_agnostic.png")
 
-        ''' load mgd pipeline '''
-        if self.mgd_pipe is None:
-            self.mgd_pipe = self._load_mgd_models_and_pipeline()
+        ''' load aniany pl '''
+        self.aniany_pl = self._load_aniany_pl(ckpt_path)
 
         ''' prepare inputs for DDIM '''
         guidance_scale = 7.5
@@ -571,6 +572,7 @@ class AniAnyBatchInfer(object):
         model_input = self.trans(model_down_rgb).unsqueeze(0).cuda()
         mask_input = inpaint_mask.unsqueeze(0).cuda()
         sketch_input = edge_tensor.unsqueeze(0).cuda()
+        pose_input = self.trans(pose_rgb).unsqueeze(0).cuda() * 0.5 + 0.5  # in [0,1]
         pose_map_input = pose_dict["map"].unsqueeze(0).cuda()
         warped_input = self.trans(warped_down_rgb).unsqueeze(0).cuda() if warped_rgb is not None else None
         print("tensors:", model_input.shape, mask_input.shape, sketch_input.shape, pose_map_input.shape)
@@ -583,34 +585,25 @@ class AniAnyBatchInfer(object):
         neg_prompts = [""]
 
         ''' run '''
-        generated_images = self.mgd_pipe(
-            prompt=prompts,
-            image=model_input,
-            mask_image=mask_input,
-            pose_map=pose_map_input,
-            warped=warped_input,
-            sketch=sketch_input,
-            height=height,
-            width=width,
+        latent_output = self.aniany_pl.forward(
+            person=model_input,
+            warped_person=warped_input,
+            dwpose=pose_input,
             num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            num_images_per_prompt=num_samples,
-            generator=generator,
-            sketch_cond_rate=sketch_cond_rate,
-            start_cond_rate=start_cond_rate,
-            no_pose=no_pose,
-            negative_prompt=neg_prompts,
-            use_ddim_inversion=False,
-        ).images  # num_samples*[Image.Image]
+        )
+        final_rgb = self.aniany_pl.post_process_after_forward(
+            latent_output.noisy
+        ).final_rgb
 
         ''' vis outputs '''
-        print("model_input:", model_input[0].min(), model_input[0].max())  # in [-1,1]
+        print("final_rgb:", final_rgb[0].min(), final_rgb[0].max(), final_rgb.shape)  # in [-1,1], (B,H,W,C)
         ret_pils = []
         model_i0 = model_input[0] * 0.5 + 0.5
         parse_i0 = parse_dict["tensor"][0].to(device)
-        for i in range(len(generated_images)):
-            generated_images[i].save(f"tmp_y_gen_{seed}_{i:02d}.png")
-            final_img = self._compose_img(model_i0, generated_images[i], parse_i0)
+        for i in range(final_rgb.shape[0]):
+            generated_pil = Image.fromarray(final_rgb[i])
+            generated_pil.save(f"tmp_y_gen_{seed}_{i:02d}.png")
+            final_img = self._compose_img(model_i0, generated_pil, parse_i0)
             final_img = transforms.ToPILImage()(final_img)
             final_img.save(os.path.join(".", f"tmp_z_result_{i:02d}.png"))
             ret_pils.append(final_img)
@@ -807,54 +800,21 @@ class AniAnyBatchInfer(object):
         print("inpaint_mask:", inpaint_mask.shape)
         return inpaint_mask
 
-    def _load_mgd_models_and_pipeline(self):
-        if self.unet is None:
-            self.unet = aniany_unet(
-                pretrained=True,
-                in_channels=self.unet_in_channels,
-                weight_path=self.unet_weight_path,
-            )
-        sd_inpaint_dir = "pretrained/stable-diffusion-inpainting"
-        if self.text_encoder is None:
-            self.text_encoder = CLIPTextModel.from_pretrained(sd_inpaint_dir + "/text_encoder")
-        if self.vae is None:
-            self.vae = AutoencoderKL.from_pretrained(sd_inpaint_dir + "/vae")
-        if self.tokenizer is None:
-            self.tokenizer = CLIPTokenizer.from_pretrained(sd_inpaint_dir + "/tokenizer")
-        if self.val_scheduler is None:
-            self.val_scheduler = DDIMScheduler.from_pretrained(sd_inpaint_dir + "/scheduler")
-            self.val_scheduler.set_timesteps(50)
-
-        # Freeze vae and text_encoder
-        self.vae.requires_grad_(False)
-        self.text_encoder.requires_grad_(False)
-        self.vae.eval()
-        self.text_encoder.eval()
-
-        # Enable memory efficient attention if requested
-        if is_xformers_available():
-            self.unet.enable_xformers_memory_efficient_attention()
-        else:
-            raise ValueError("xformers is not available. Make sure it is installed correctly")
-
-        # Move text_encode and vae to gpu and cast to weight_dtype
-        device = "cuda:0"
-        weight_dtype = torch.float32
-        self.text_encoder.to(device, dtype=weight_dtype)
-        self.vae.to(device, dtype=weight_dtype)
-        self.unet.to(device)
-        self.unet.eval()
-
-        # Select fast classifier free guidance
-        mgd_pipe = MGDPipe(
-            text_encoder=self.text_encoder,
-            vae=self.vae,
-            unet=self.unet,
-            tokenizer=self.tokenizer,
-            scheduler=self.val_scheduler,
-        )
-        mgd_pipe.enable_attention_slicing()
-        return mgd_pipe
+    def _load_aniany_pl(self, ckpt_path: str = None):
+        if self.ckpt_path == ckpt_path:  # no need to reload
+            return self.aniany_pl
+        aniany_pl = AnimateAnyonePL(
+            train_set=None,
+            seed=42
+        ).cuda()
+        if ckpt_path is not None:
+            weight = torch.load(ckpt_path, map_location="cpu")["state_dict"]
+            aniany_pl.load_state_dict(weight)
+            self.ckpt_path = ckpt_path
+            print(f"[AniAnyBatchInfer] model loaded from: {ckpt_path}")
+        aniany_pl.eval()
+        # aniany_pl.enable_attention_slicing()
+        return aniany_pl
 
     @staticmethod
     def _compose_img(gt_img, fake_img, im_parse):

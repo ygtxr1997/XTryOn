@@ -962,8 +962,8 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         all_sa_ks, all_sa_vs = [], []
         down_block_res_samples = (sample,)
         ref_cnt = 0
-        if in_k_refs is not None:
-            print("UNet in_k_refs:", [len(ref) for ref in in_k_refs])
+        # if in_k_refs is not None:
+        #     print("UNet in_k_refs:", [len(ref) for ref in in_k_refs])
         for idx, downsample_block in enumerate(self.down_blocks):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
                 # For t2i-adapter CrossAttnDownBlock2D
@@ -995,7 +995,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
 
                 if is_adapter and len(down_block_additional_residuals) > 0:
                     sample += down_block_additional_residuals.pop(0)
-            print(f"aniany UNet sa_ks@{ref_cnt}:", len(sa_ks))
+            # print(f"aniany UNet sa_ks@{ref_cnt}:", len(sa_ks))
             if len(sa_ks) > 0:
                 all_sa_ks.append(sa_ks)
                 all_sa_vs.append(sa_vs)
@@ -1031,7 +1031,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                 in_k_refs=block_k_refs,
                 in_v_refs=block_v_refs,
             )
-            print(f"aniany UNet sa_ks@{ref_cnt}:", len(sa_ks))
+            # print(f"aniany UNet sa_ks@{ref_cnt}:", len(sa_ks))
             if len(sa_ks) > 0:
                 all_sa_ks.append(sa_ks)
                 all_sa_vs.append(sa_vs)
@@ -1086,7 +1086,7 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                     upsample_size=upsample_size,
                     scale=lora_scale,
                 )
-            print(f"aniany UNet sa_ks@{ref_cnt}:", len(sa_ks))
+            # print(f"aniany UNet sa_ks@{ref_cnt}:", len(sa_ks))
             if len(sa_ks) > 0:
                 all_sa_ks.append(sa_ks)
                 all_sa_vs.append(sa_vs)

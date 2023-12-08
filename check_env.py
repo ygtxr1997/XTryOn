@@ -335,9 +335,13 @@ def check_processed_dataset():
         ["DressCode/upper", "VITON-HD/train"],
         debug_len=10,
         output_keys=(
-            "person", "densepose", "inpaint_mask", "pose_map", "warped_person",
-            "pidinet", "blip2_cloth", "person_fn", "deshadow"
-        )
+            "person", "dwpose", "warped_person",
+            "person_fn",
+        ),
+        scale_height=1024,
+        scale_width=768,
+        downsample_warped=True,
+        mode="val",
     )
 
     def print_item(key, val):
@@ -490,9 +494,9 @@ if __name__ == "__main__":
     # check_mgd()
     # check_blip2()
     # check_json()
-    # check_processed_dataset()
+    check_processed_dataset()
     # check_gen_file_list()
     # check_vis_point()
     # check_ddim_inversion()
     # check_divide()
-    check_aniany()
+    # check_aniany()

@@ -1,5 +1,6 @@
 import datetime
 import argparse
+import os.path
 
 import torch
 import lightning.pytorch as pl
@@ -25,14 +26,34 @@ def main(opt):
             "person", "dwpose", "warped_person", "person_fn",
         ),
         debug_len=None,
+        mode="train",
+        downsample_warped=True,
+    )
+    val_set = MergedProcessedDataset(
+        "/cfs/yuange/datasets/xss/processed/",
+        ["VITON-HD/train", ],  # ["DressCode/upper", "VITON-HD/train"],
+        scale_height=1024,
+        scale_width=768,
+        output_keys=(
+            "person", "dwpose", "warped_person", "person_fn",
+        ),
+        debug_len=None,
+        mode="val",
+        downsample_warped=True,
     )
 
     model_pl = AnimateAnyonePL(
         train_set=train_set,
+        val_set=val_set,
         noise_offset=0.1,
         input_perturbation=0.1,
         snr_gamma=5.0,
     )
+
+    if os.path.exists(opt.resume_ckpt):
+        resume_weight = torch.load(opt.resume_ckpt, map_location="cpu")["state_dict"]
+        model_pl.load_state_dict(resume_weight)
+        print(f"[Main] Resume from: {opt.resume_ckpt}")
 
     log_version = now = datetime.datetime.now().strftime("%Y_%m_%dT%H_%M_%S")
     tensorboard_logger = TensorBoardLogger(
@@ -74,5 +95,6 @@ def main(opt):
 
 if __name__ == "__main__":
     args = argparse.ArgumentParser()
+    args.add_argument("--resume_ckpt", type=str, default="", help="Resume from ckpt.")
     opts = args.parse_args()
     main(opts)

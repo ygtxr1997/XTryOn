@@ -351,6 +351,7 @@ class AnimateAnyoneLatentOutput(BaseOutput):
 class AnimateAnyonePL(pl.LightningModule):
     def __init__(self,
                  train_set: Dataset = None,
+                 val_set: Dataset = None,
                  seed: int = 42,
                  noise_offset: float = 0.,  # recommended 0.1
                  input_perturbation: float = 0.,  # recommended 0.1
@@ -389,7 +390,7 @@ class AnimateAnyonePL(pl.LightningModule):
 
         ''' dataset '''
         self.train_set = train_set
-        self.val_set = train_set
+        self.val_set = val_set
 
         ''' training params '''
         self.noise_offset = noise_offset
@@ -468,7 +469,7 @@ class AnimateAnyonePL(pl.LightningModule):
         person_warped_latent = latent_outputs.person_warped_latent
 
         # post-process
-        outputs = self._post_process_after_forward(
+        outputs = self.post_process_after_forward(
             noisy, loss, person_warped_latent,
             do_classifier_free_guidance=do_classifier_free_guidance,
         )
@@ -702,7 +703,7 @@ class AnimateAnyonePL(pl.LightningModule):
                 )
                 sa_k_ref = ref_output.all_sa_ks
                 sa_v_ref = ref_output.all_sa_vs
-                print("ref_net:", len(sa_k_ref), sa_k_ref[0][0].dtype)
+                # print("ref_net:", len(sa_k_ref), sa_k_ref[0][0].dtype)
 
                 # 7.b main net
                 noisy += cond_fcn_features
@@ -736,7 +737,7 @@ class AnimateAnyonePL(pl.LightningModule):
                 )
                 sa_k_ref = ref_output.all_sa_ks
                 sa_v_ref = ref_output.all_sa_vs
-                print("ref_net:", len(sa_k_ref), sa_k_ref[0][0].dtype)
+                # print("ref_net:", len(sa_k_ref), sa_k_ref[0][0].dtype)
 
                 # 7.b main net
                 noisy_double += cond_fcn_features
@@ -796,7 +797,7 @@ class AnimateAnyonePL(pl.LightningModule):
             person_warped_latent=person_warped_latent,
         )
 
-    def _post_process_after_forward(
+    def post_process_after_forward(
             self,
             denoise_latents: torch.Tensor,
             loss: torch.Tensor = None,

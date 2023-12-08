@@ -252,6 +252,8 @@ class ProcessedDataset(Dataset):
                  fn_list: str = "train_list.txt",
                  output_keys: tuple = ("person", "densepose", "inpaint_mask", "pose_map", "blip2_cloth", "person_fn"),
                  debug_len: int = None,
+                 downsample_warped: bool = False,
+                 mode: str = "train",
                  ):
         self.root = root
         self.level1_dir = level1_dir
@@ -260,6 +262,8 @@ class ProcessedDataset(Dataset):
         self.fn_list = fn_list
         self.output_keys = output_keys
         self.debug_len = debug_len
+        self.downsample_warped = downsample_warped
+        self.mode = mode
 
         print(f"[ProcessedDataset] Loading dataset from: ({level1_dir}) under ({root})")
         self.input_keys = self._init_input_keys(output_keys)  # according to the dependency relationship
@@ -278,15 +282,6 @@ class ProcessedDataset(Dataset):
 
     def __getitem__(self, index):
         in_item_dict = self._getitem_from_fulllist(index)  # keys()=self.input_keys
-
-        # pre-process, replace the gray pixels in warped with person
-        if "person" in self.output_keys and "warped_person" in self.output_keys:
-            warped = np.array(in_item_dict["warped_person"])
-            person_tmp = np.array(in_item_dict["person"].resize(in_item_dict["warped_person"].size))
-            positions = (warped[:, :, 0] == 127) & (warped[:, :, 1] == 127) & (warped[:, :, 2] == 127)
-            warped[positions] = person_tmp[positions]
-            in_item_dict["warped_person"] = Image.fromarray(warped)
-
         out_item_dict = {}
 
         width, height = self.scale_width, self.scale_height
@@ -327,6 +322,13 @@ class ProcessedDataset(Dataset):
                              ):  # rgb images resized with "BILINEAR"
                 in_val: Image.Image = in_item_dict[out_key]
                 out_val = in_val.resize((width, height), resample=Image.BILINEAR)
+                if out_key in ("warped_person", ):  # downsample the warped image
+                    out_val = self._process_warped(warped_pil=out_val,
+                                                   person_pil=in_item_dict["person"],
+                                                   parse_pil=in_item_dict["parse"]
+                                                   )
+                    if self.downsample_warped:
+                        out_val = self._process_down_gauss_blur(out_val, height, width)
                 out_item_dict[out_key] = self.trans(out_val)  # (3,H,W), in [-1,1]
             elif out_key in ("dwpose_json", "blip2_cloth", "person_fn", "cloth_fn",
                              ):  # some keys require no change
@@ -449,10 +451,29 @@ class ProcessedDataset(Dataset):
                 in_keys.append(key)
             if key in ("inpaint_mask", "pose_map",):  # has dependencies
                 in_keys.extend(["dwpose_json", "parse"])
-            if key in ("deshadow",):  # has dependencies
+            if key in ("deshadow", "warped_person",):  # has dependencies
                 in_keys.extend(["person", "parse"])
         in_keys = list(set(in_keys))  # remove repeat
         return in_keys
+
+    def _process_warped(self, warped_pil: Image.Image, person_pil: Image.Image, parse_pil: Image.Image):
+        warped_arr = np.array(warped_pil)
+        person_arr = np.array(person_pil.resize(warped_pil.size, resample=Image.BILINEAR))
+        parse_arr = np.array(parse_pil.resize(warped_pil.size, resample=Image.NEAREST))
+        bg_mask = (parse_arr == 0).astype(np.float32)[:, :, np.newaxis]
+        warped_arr = person_arr * bg_mask + warped_arr * (1 - bg_mask)
+        warped_arr = warped_arr.clip(0, 255).astype(np.uint8)
+        return Image.fromarray(warped_arr)
+
+    def _process_down_gauss_blur(self, hq_pil: Image.Image, hq_height: int, hq_width: int,
+                                 gauss_kernel: int = 3,
+                                 ):
+        if self.mode != "train":  # augmentation only for training
+            return hq_pil
+        h, w = hq_height, hq_width
+        lq_rgb = np.array(hq_pil.resize((w // 2, h // 2)).resize((w, h)))
+        lq_rgb = cv2.GaussianBlur(lq_rgb, ksize=(gauss_kernel, gauss_kernel), sigmaX=3)
+        return Image.fromarray(lq_rgb)
 
     def _process_deshadow(self, person_pil: Image.Image, parse_pil: Image.Image,
                           down_scale_ratio=2.0,
@@ -670,6 +691,8 @@ class MergedProcessedDataset(Dataset):
                  fn_list: str = "train_list.txt",
                  output_keys: tuple = ("person", "densepose", "inpaint_mask", "pose_map", "blip2_cloth", "person_fn"),
                  debug_len: int = None,
+                 downsample_warped: bool = False,
+                 mode: str = "train",
                  ):
         self.datasets = []
         self.len = 0
@@ -678,7 +701,8 @@ class MergedProcessedDataset(Dataset):
         for level1_dir in level1_dirs:
             subset = ProcessedDataset(
                 root, level1_dir,
-                scale_height, scale_width, fn_list, output_keys, debug_len
+                scale_height, scale_width, fn_list, output_keys, debug_len,
+                downsample_warped, mode
             )
             self.datasets.append(subset)
             self.len = self.len + len(subset)
