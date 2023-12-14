@@ -322,12 +322,12 @@ class ProcessedDataset(Dataset):
                              ):  # rgb images resized with "BILINEAR"
                 in_val: Image.Image = in_item_dict[out_key]
                 out_val = in_val.resize((width, height), resample=Image.BILINEAR)
-                if out_key in ("warped_person", ):  # downsample the warped image
+                if out_key in ("warped_person", ):  # paste
                     out_val = self._process_warped(warped_pil=out_val,
                                                    person_pil=in_item_dict["person"],
                                                    parse_pil=in_item_dict["parse"]
                                                    )
-                    if self.downsample_warped:
+                    if self.downsample_warped:  # downsample the warped image
                         out_val = self._process_down_gauss_blur(out_val, height, width)
                 out_item_dict[out_key] = self.trans(out_val)  # (3,H,W), in [-1,1]
             elif out_key in ("dwpose_json", "blip2_cloth", "person_fn", "cloth_fn",

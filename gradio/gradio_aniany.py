@@ -23,7 +23,7 @@ class ModelHolder(object):
 
     def _load_models(self):
         if self.model_infer is None:
-            test_weight_path = "/cfs/yuange/code/XTryOn/lightning_logs/mgd/2023_12_04T12_43_20/checkpoints/epoch=29-step=10890.ckpt"
+            test_weight_path = "/cfs/yuange/code/XTryOn/lightning_logs/aniany/2023_12_08T23_25_22/checkpoints/epoch=29-step=43620.ckpt"
             self.model_infer = AniAnyBatchInfer(
                 unet_in_channels=4,
                 unet_weight_path=test_weight_path,

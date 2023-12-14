@@ -667,7 +667,12 @@ class AnimateAnyonePL(pl.LightningModule):
         image_embedding = input_latents.image_embedding
 
         # 3.b get features of condition
+        scale_factor = self.vae_scale_factor
         cond_fcn_features = self.cond_fcn(dwpose)
+        cond_fcn_features = F.interpolate(
+            cond_fcn_features, size=(in_height // scale_factor, in_width // scale_factor),
+            mode="bilinear", align_corners=True
+        )
 
         ''' get noisy and target '''
         num_channels_latents = self.vae.config.latent_channels

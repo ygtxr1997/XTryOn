@@ -20,26 +20,26 @@ def main(opt):
     train_set = MergedProcessedDataset(
         "/cfs/yuange/datasets/xss/processed/",
         ["VITON-HD/train", ],  # ["DressCode/upper", "VITON-HD/train"],
-        scale_height=512,
-        scale_width=384,
+        scale_height=768,
+        scale_width=576,
         output_keys=(
             "person", "dwpose", "warped_person", "person_fn",
         ),
         debug_len=None,
         mode="train",
-        downsample_warped=True,
+        downsample_warped=False,
     )
     val_set = MergedProcessedDataset(
         "/cfs/yuange/datasets/xss/processed/",
         ["VITON-HD/train", ],  # ["DressCode/upper", "VITON-HD/train"],
-        scale_height=1024,
-        scale_width=768,
+        scale_height=768,
+        scale_width=576,
         output_keys=(
             "person", "dwpose", "warped_person", "person_fn",
         ),
         debug_len=None,
         mode="val",
-        downsample_warped=True,
+        downsample_warped=False,
     )
 
     model_pl = AnimateAnyonePL(
@@ -70,9 +70,10 @@ def main(opt):
         verbose=True
     )
     from models.generate.aniany_attention_processor import Attention
+    from diffusers.models.resnet import ResnetBlock2D
     from models.generate.aniany_attention import BasicTransformerBlock
     from lightning.pytorch.strategies import FSDPStrategy
-    policy = {BasicTransformerBlock}
+    policy = {BasicTransformerBlock, ResnetBlock2D}
     strategy = FSDPStrategy(
         auto_wrap_policy=policy,
         sharding_strategy="FULL_SHARD",
