@@ -320,6 +320,7 @@ def check_json():
 
 def check_processed_dataset():
     from datasets.xss_datasets import ProcessedDataset, MergedProcessedDataset
+    from tools.cvt_data import tensor_to_rgb
     # dataset = ProcessedDataset(
     #     "/cfs/yuange/datasets/xss/processed/",
     #     "DressCode/upper",
@@ -335,19 +336,27 @@ def check_processed_dataset():
         ["DressCode/upper", "VITON-HD/train"],
         debug_len=10,
         output_keys=(
-            "person", "dwpose", "warped_person",
+            "person", "cloth", "dwpose", "warped_person",
             "person_fn",
         ),
         scale_height=1024,
         scale_width=768,
         downsample_warped=True,
         mode="val",
+        aug_flip=1.,
+        aug_shift_prob=1.,
+        aug_scale_prob=1.,
+        aug_hsv_prob=1.,
+        aug_contrast_prob=1.,
     )
 
     def print_item(key, val):
         print(f"({key}):")
         if isinstance(val, torch.Tensor):
             print(val.shape, val.min(), val.max())
+            save_fn = f"./tmp_data_{key}.jpg"
+            pil = tensor_to_rgb(val.unsqueeze(0), out_as_pil=True)
+            pil.save(save_fn)
         else:
             print(val)
 
@@ -441,11 +450,11 @@ def check_divide():
 
 
 def check_aniany():
-    from models.generate.aniany import ConditionFCN
-    net = ConditionFCN()
-    pose_cond = torch.randn(4, 3, 512, 384)
-    out = net(pose_cond)
-    print(out.shape)
+    # from models.generate.aniany import ConditionFCN
+    # net = ConditionFCN()
+    # pose_cond = torch.randn(4, 3, 512, 384)
+    # out = net(pose_cond)
+    # print(out.shape)
 
     # from models.generate.aniany import FrozenCLIPTextImageEmbedder
     # net = FrozenCLIPTextImageEmbedder()
@@ -480,6 +489,22 @@ def check_aniany():
     # print(x_main.shape)
     # print(x_main)
 
+    weight_path = "/cfs/yuange/code/XTryOn/lightning_logs/aniany/2023_12_11T12_00_12/checkpoints/epoch=49-step=72700.ckpt"
+
+    # from models.generate.aniany import aniany_unet
+    # unet_ref = aniany_unet(in_channels=8, out_channels=4, weight_path=weight_path, weight_key="unet_ref.")
+    # unet_main = aniany_unet(in_channels=4, out_channels=4, weight_path=weight_path, weight_key="unet_main.")
+
+    from models.generate.aniany import AnimateAnyonePL
+    model_pl = AnimateAnyonePL(
+        train_set=None,
+        val_set=None,
+        noise_offset=0.1,
+        input_perturbation=0.1,
+        snr_gamma=5.0,
+        resume_ckpt=weight_path,
+    )
+
 
 if __name__ == "__main__":
     # check_m2fp()
@@ -494,9 +519,9 @@ if __name__ == "__main__":
     # check_mgd()
     # check_blip2()
     # check_json()
-    check_processed_dataset()
+    # check_processed_dataset()
     # check_gen_file_list()
     # check_vis_point()
     # check_ddim_inversion()
     # check_divide()
-    # check_aniany()
+    check_aniany()

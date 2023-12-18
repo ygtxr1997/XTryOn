@@ -5,7 +5,7 @@ import glob
 from typing import Union, List
 
 import cv2
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageEnhance
 import numpy as np
 from tqdm import tqdm
 from einops import rearrange
@@ -254,6 +254,15 @@ class ProcessedDataset(Dataset):
                  debug_len: int = None,
                  downsample_warped: bool = False,
                  mode: str = "train",
+                 aug_flip: float = 0.,
+                 aug_shift_prob: float = 0.,
+                 aug_shift_limit: float = 0.2,
+                 aug_scale_prob: float = 0.,
+                 aug_scale_limit: float = 0.2,
+                 aug_hsv_prob: float = 0.,
+                 aug_hsv_limit: float = 0.5,
+                 aug_contrast_prob: float = 0.,
+                 aug_contrast_limit: float = 0.3,
                  ):
         self.root = root
         self.level1_dir = level1_dir
@@ -264,6 +273,15 @@ class ProcessedDataset(Dataset):
         self.debug_len = debug_len
         self.downsample_warped = downsample_warped
         self.mode = mode
+        self.aug_flip = aug_flip
+        self.aug_shift_prob = aug_shift_prob
+        self.aug_shift_limit = aug_shift_limit
+        self.aug_scale_prob = aug_scale_prob
+        self.aug_scale_limit = aug_scale_limit
+        self.aug_hsv_prob = aug_hsv_prob
+        self.aug_hsv_limit = aug_hsv_limit
+        self.aug_contrast_prob = aug_contrast_prob
+        self.aug_contrast_limit = aug_contrast_limit
 
         print(f"[ProcessedDataset] Loading dataset from: ({level1_dir}) under ({root})")
         self.input_keys = self._init_input_keys(output_keys)  # according to the dependency relationship
@@ -281,7 +299,29 @@ class ProcessedDataset(Dataset):
         return self.len
 
     def __getitem__(self, index):
-        in_item_dict = self._getitem_from_fulllist(index)  # keys()=self.input_keys
+        """"""
+        ''' augmentation params '''
+        use_flip = bool(np.random.uniform(0, 1) < self.aug_flip)
+        h_shift, w_shift = 0., 0.
+        if np.random.uniform(0, 1) < self.aug_shift_prob:
+            h_shift = float(np.random.uniform(-self.aug_shift_limit, self.aug_shift_limit))
+            w_shift = float(np.random.uniform(-self.aug_shift_limit, self.aug_shift_limit))
+        scale_ratio = 1.
+        if np.random.uniform(0, 1) < self.aug_scale_prob:
+            scale_ratio = 1. + np.random.uniform(-self.aug_scale_limit, self.aug_scale_limit)
+        hsv_offset = 1.
+        if np.random.uniform(0, 1) < self.aug_hsv_prob:
+            hsv_offset = 1. + np.random.uniform(-self.aug_hsv_limit, self.aug_hsv_limit)
+        contrast_offset = 1.
+        if np.random.uniform(0, 1) < self.aug_contrast_prob:
+            contrast_offset = 1. + np.random.uniform(-self.aug_contrast_limit, self.aug_contrast_limit)
+
+        in_item_dict = self._getitem_from_fulllist(index, use_flip=use_flip,
+                                                   h_shift=h_shift, w_shift=w_shift,
+                                                   scale_ratio=scale_ratio,
+                                                   hsv_offset=hsv_offset,
+                                                   contrast_offset=contrast_offset,
+                                                   )  # keys()=self.input_keys
         out_item_dict = {}
 
         width, height = self.scale_width, self.scale_height
@@ -291,7 +331,11 @@ class ProcessedDataset(Dataset):
             if out_key in ("inpaint_mask", "pose_map",
                            ):  # some keys need to be processed additionally
                 parse_dict = self._process_parse(parse_pil=in_item_dict["parse"])
-                pose_dict = self._process_pose(pose_keypoint_dict=in_item_dict["dwpose_json"])
+                pose_dict = self._process_pose(pose_keypoint_dict=in_item_dict["dwpose_json"],
+                                               use_flip=use_flip,
+                                               h_shift=h_shift, w_shift=w_shift,
+                                               scale_ratio=scale_ratio,
+                                               )
                 inpaint_mask = self._process_inpaint_mask(
                     pose_data=pose_dict["data"],
                     parse_arms=parse_dict["arms"],
@@ -346,7 +390,13 @@ class ProcessedDataset(Dataset):
 
         return out_item_dict  # keys()=self.output_keys
 
-    def _getitem_from_fulllist(self, index: int) -> dict:
+    def _getitem_from_fulllist(self, index: int,
+                               use_flip: bool = False,
+                               h_shift: float = 0., w_shift: float = 0.,
+                               scale_ratio: float = 1.,
+                               hsv_offset: float = 1.,
+                               contrast_offset: float = 1.,
+                               ) -> dict:
         in_item_dict = {}
 
         ''' always load person, cloth, cloth_mask '''
@@ -369,6 +419,21 @@ class ProcessedDataset(Dataset):
         in_item_dict["cloth_fn"] = cloth_fn
         in_item_dict["cloth_mask"] = cloth_mask_pil
 
+        ''' independently augment '''
+        cloth_h_shift = float(np.random.uniform(-self.aug_shift_limit, self.aug_shift_limit))
+        cloth_w_shift = float(np.random.uniform(-self.aug_shift_limit, self.aug_shift_limit))
+        cloth_scale_ratio = 1. + np.random.uniform(-self.aug_scale_limit, self.aug_scale_limit)
+        cloth_hsv_offset = 1. + np.random.uniform(-self.aug_hsv_limit, self.aug_hsv_limit)
+        cloth_contrast_offset = 1. + np.random.uniform(-self.aug_contrast_limit, self.aug_contrast_limit)
+        if h_shift == 0. and w_shift == 0.:
+            cloth_h_shift, cloth_w_shift = 0., 0.
+        if scale_ratio == 1.:
+            cloth_scale_ratio = 1.
+        if hsv_offset == 1.:
+            cloth_hsv_offset = 1.
+        if contrast_offset == 1.:
+            cloth_contrast_offset = 1.
+
         ''' load other indicated keys '''
         for key in self.input_keys:
             if key in ("densepose", "dwpose", "m2f_person", "m2f_cloth", "parse", "warped_person", "pidinet"):  # PIL.Image
@@ -383,9 +448,52 @@ class ProcessedDataset(Dataset):
             elif key in ("blip2_cloth",):  # blip2 caption
                 item_data: str = self.fulllist_unopened[key][index]
             elif key in ("person", "cloth", "cloth_mask"):  # skip since already loaded
-                continue  # do nothing here
+                item_data = in_item_dict[key]  # do nothing here
             else:
                 raise KeyError(f"Key type {key} not supported.")
+
+            ''' augmentation '''
+            if isinstance(item_data, Image.Image):
+                w, h = item_data.size
+                 # flip
+                if use_flip:
+                    item_data = item_data.transpose(Image.FLIP_LEFT_RIGHT)
+
+                # shift
+                if key in ("cloth", "cloth_mask"):
+                    item_data = item_data.crop((int(w * cloth_w_shift), int(h * cloth_h_shift),
+                                                int(w * cloth_w_shift) + w, int(h * cloth_h_shift) + h))
+                else:
+                    item_data = item_data.crop((int(w * w_shift), int(h * h_shift),
+                                                int(w * w_shift) + w, int(h * h_shift) + h))
+
+                # scale
+                if key in ("cloth",):
+                    item_data = item_data.resize((int(w * cloth_scale_ratio), int(h * cloth_scale_ratio)),
+                                                 resample=Image.BILINEAR)
+                elif key in ("cloth_mask", "m2f_cloth",):
+                    item_data = item_data.resize((int(w * cloth_scale_ratio), int(h * cloth_scale_ratio)),
+                                                 resample=Image.NEAREST)
+                elif key in ("densepose", "m2f_person", "parse",):
+                    item_data = item_data.resize((int(w * scale_ratio), int(h * scale_ratio)),
+                                                 resample=Image.NEAREST)
+                else:
+                    item_data = item_data.resize((int(w * scale_ratio), int(h * scale_ratio)),
+                                                 resample=Image.BILINEAR)
+
+                # hsv
+                bright_enhancer = ImageEnhance.Brightness(item_data)
+                if key in ("cloth",):
+                    item_data = bright_enhancer.enhance(cloth_hsv_offset)
+                elif key in ("warped_person",):
+                    item_data = bright_enhancer.enhance(hsv_offset)
+
+                # contrast
+                contrast_enhancer = ImageEnhance.Contrast(item_data)
+                if key in ("cloth",):
+                    item_data = contrast_enhancer.enhance(cloth_contrast_offset)
+                elif key in ("warped_person",):
+                    item_data = contrast_enhancer.enhance(contrast_offset)
 
             in_item_dict[key] = item_data
 
@@ -542,6 +650,10 @@ class ProcessedDataset(Dataset):
 
     def _process_pose(self, pose_keypoint_dict: dict,
                       point_num: int = 18, radius: int = 5,
+                      use_flip: bool = False,
+                      h_shift: float = 0.,
+                      w_shift: float = 0.,
+                      scale_ratio: float = 1.,
                       ) -> dict:
         # modified on models/generate/image_infer.py
         pose_data = pose_keypoint_dict['people'][0]['person_keypoints_2d']['candidate']
@@ -555,6 +667,14 @@ class ProcessedDataset(Dataset):
         # pose_data[:, 1] = pose_data[:, 1] * (self.height / 1024)
 
         height, width = self.scale_height, self.scale_width
+
+        if use_flip:
+            pose_data[:, 0] = 1 - pose_data[:, 0]  # symmetry
+        pose_data[:, 0]  = pose_data[:, 0] + w_shift
+        pose_data[:, 1] = pose_data[:, 1] + h_shift
+
+        pose_data[:, 0] = (pose_data[:, 0] - 0.5) * scale_ratio + 0.5
+        pose_data[:, 1] = (pose_data[:, 1] - 0.5) * scale_ratio + 0.5
 
         pose_data[:, 0] = pose_data[:, 0] * width
         pose_data[:, 1] = pose_data[:, 1] * height
@@ -693,6 +813,11 @@ class MergedProcessedDataset(Dataset):
                  debug_len: int = None,
                  downsample_warped: bool = False,
                  mode: str = "train",
+                 aug_flip: float = 0.5,
+                 aug_shift_prob: float = 0.5,
+                 aug_scale_prob: float = 0.5,
+                 aug_hsv_prob: float = 0.5,
+                 aug_contrast_prob: float = 0.5,
                  ):
         self.datasets = []
         self.len = 0
@@ -702,7 +827,9 @@ class MergedProcessedDataset(Dataset):
             subset = ProcessedDataset(
                 root, level1_dir,
                 scale_height, scale_width, fn_list, output_keys, debug_len,
-                downsample_warped, mode
+                downsample_warped, mode,
+                aug_flip=aug_flip, aug_shift_prob=aug_shift_prob, aug_scale_prob=aug_scale_prob,
+                aug_hsv_prob=aug_hsv_prob, aug_contrast_prob=aug_contrast_prob,
             )
             self.datasets.append(subset)
             self.len = self.len + len(subset)

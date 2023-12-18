@@ -1,4 +1,5 @@
 import os
+import time
 from typing import Union, List
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -54,9 +55,9 @@ def compute_snr(noise_scheduler, timesteps):
     return snr
 
 
-def extract_unet_from_ckpt(ckpt_path: str):
+def extract_unet_from_ckpt(ckpt_path: str, extract_key: str = None):
     w = torch.load(ckpt_path, map_location="cpu")["state_dict"]
-    extract_key = "unet."
+    extract_key = "unet." if extract_key is None else extract_key
     unet_dict = OrderedDict()
     for k in w.keys():
         if extract_key in k:
@@ -66,7 +67,8 @@ def extract_unet_from_ckpt(ckpt_path: str):
 
 def aniany_unet(dataset: str = "vitonhd",
                 pretrained: bool = True,
-                weight_path: str = None,
+                weight_dict: dict = None,
+                weight_key: str = None,
                 in_channels: int = 28,
                 out_channels: int = 4,
                 zero_init_extra_channels: bool = True,
@@ -74,12 +76,13 @@ def aniany_unet(dataset: str = "vitonhd",
     """ # This docstring shows up in hub.help()
     MGD model
     pretrained (bool): kwargs, load pretrained weights into the model
+    If weight_dict == None, load from mgd weight
     """
-    config = UNet2DConditionModel.load_config(
-        "configs/runwayml/stable-diffusion-inpainting",
-        subfolder="unet", local_files_only=True)
-    config['in_channels'] = in_channels
-    config['out_channels'] = out_channels
+    # config = UNet2DConditionModel.load_config(
+    #     "configs/runwayml/stable-diffusion-inpainting",
+    #     subfolder="unet", local_files_only=True)
+    # config['in_channels'] = in_channels
+    # config['out_channels'] = out_channels
     # unet = UNet2DConditionModel.from_config(config)
     unet = UNet2DConditionModel(
         act_fn="silu",
@@ -108,67 +111,64 @@ def aniany_unet(dataset: str = "vitonhd",
     )  # according to unet/config.json
 
     if pretrained:
-        if weight_path is None:
+        if weight_dict is None:  # default: load mgd weights
             weight_path = f"pretrained/mgd/{dataset}.pth"  # in:28channels, out:4channels
             weight = torch.load(weight_path, map_location="cpu")
-            if in_channels > 28:
-                weight_28channels = weight
-                weight_31channels = weight_28channels
-
-                ori_c_out, ori_c_in, ori_h, ori_w = weight_31channels["conv_in.weight"].shape
-                dtype = weight_31channels["conv_in.weight"].dtype
-                extra_shape = (ori_c_out, in_channels - ori_c_in, ori_h, ori_w)
-
-                if zero_init_extra_channels:
-                    extra_kernels = torch.zeros(extra_shape, dtype=dtype)
-                else:
-                    extra_kernels = torch.randn(extra_shape, dtype=dtype)
-                weight_31channels["conv_in.weight"] = torch.cat([
-                    weight_28channels["conv_in.weight"],
-                    extra_kernels
-                ], dim=1)  # zero_init
-                weight = weight_31channels
-            elif in_channels < 28:
-                weight_28channels = weight
-                weight_4channels = weight_28channels
-
-                ori_c_out, ori_c_in, ori_h, ori_w = weight_28channels["conv_in.weight"].shape
-                dtype = weight_28channels["conv_in.weight"].dtype
-                delete_shape = (ori_c_out, ori_c_in - in_channels, ori_h, ori_w)
-
-                weight_4channels["conv_in.weight"] = weight_28channels["conv_in.weight"][:, :in_channels]  # first 4
-                weight = weight_4channels
-
-            if out_channels > 4:
-                weight_4channels = weight
-                weight_5channels = weight_4channels
-
-                ori_c_out, ori_c_in, ori_h, ori_w = weight_4channels["conv_out.weight"].shape
-                dtype = weight_5channels["conv_out.weight"].dtype
-                extra_shape = (out_channels - ori_c_out, ori_c_in, ori_h, ori_w)
-
-                if zero_init_extra_channels:
-                    extra_kernels = torch.zeros(extra_shape, dtype=dtype)
-                    extra_bias = torch.zeros(out_channels - ori_c_out, dtype=dtype)
-                else:
-                    extra_kernels = torch.randn(extra_shape, dtype=dtype)
-                    extra_bias = torch.randn(out_channels - ori_c_out, dtype=dtype)
-                weight_5channels["conv_out.weight"] = torch.cat([
-                    weight_4channels["conv_out.weight"],
-                    extra_kernels
-                ], dim=0)  # zero_init
-                weight_5channels["conv_out.bias"] = torch.cat([
-                    weight_4channels["conv_out.bias"],
-                    extra_bias
-                ], dim=0)  # zero_init
-                weight = weight_5channels
-        elif ".ckpt" in weight_path:
-            weight = extract_unet_from_ckpt(weight_path)
+        elif weight_key is not None:
+            weight = OrderedDict()
+            for k, v in weight_dict.items():
+                if weight_key in k:
+                    weight[k[len(weight_key):]] = v
         else:
-            weight = torch.load(weight_path, map_location="cpu")
+            weight = weight_dict
+
+        ''' modify input and output channels of weight '''
+        input_c_out, input_c_in, input_h, input_w = weight["conv_in.weight"].shape
+        output_c_out, output_c_in, output_h, output_w = weight["conv_out.weight"].shape
+        dtype = weight["conv_in.weight"].dtype
+
+        ''' 1. conv_in '''
+        if in_channels > input_c_in:
+            extra_shape = (input_c_out, in_channels - input_c_in, input_h, input_w)
+
+            if zero_init_extra_channels:
+                extra_kernels = torch.zeros(extra_shape, dtype=dtype)
+            else:
+                extra_kernels = torch.randn(extra_shape, dtype=dtype)
+
+            weight["conv_in.weight"] = torch.cat([
+                weight["conv_in.weight"],
+                extra_kernels  # put to the last channels
+            ], dim=1)  # zero_init
+            print(f"[aniany_unet] add in_channels: {in_channels - input_c_in}")
+        elif in_channels < input_c_in:
+            delete_shape = (input_c_out, input_c_in - in_channels, input_h, input_w)
+            weight["conv_in.weight"] = weight["conv_in.weight"][:, :in_channels]  # first several channels
+            print(f"[aniany_unet] remove in_channels: {input_c_in - in_channels}")
+
+        ''' 2. conv_out '''
+        if out_channels > output_c_out:
+            extra_shape = (out_channels - output_c_out, output_c_in, output_h, output_w)
+
+            if zero_init_extra_channels:
+                extra_kernels = torch.zeros(extra_shape, dtype=dtype)
+                extra_bias = torch.zeros(out_channels - output_c_out, dtype=dtype)
+            else:
+                extra_kernels = torch.randn(extra_shape, dtype=dtype)
+                extra_bias = torch.randn(out_channels - output_c_out, dtype=dtype)
+
+            weight["conv_out.weight"] = torch.cat([
+                weight["conv_out.weight"],
+                extra_kernels
+            ], dim=0)  # zero_init
+            weight["conv_out.bias"] = torch.cat([
+                weight["conv_out.bias"],
+                extra_bias
+            ], dim=0)  # zero_init
+            print(f"[aniany_unet] add out_channels: {out_channels - output_c_out}")
 
         unet.load_state_dict(weight)
-        print(f"[aniany_unet] model loaded from: {weight_path}")
+        print(f"[aniany_unet] model loaded, key is: {weight_key}")
 
     return unet
 
@@ -200,6 +200,8 @@ class ConditionFCN(nn.Module):
                  cond_channels: int = 3,
                  out_channels: int = 4,
                  dims: int = 2,
+                 weight_dict: dict = None,
+                 weight_key: str = None,
                  ):
         super().__init__()
 
@@ -214,6 +216,13 @@ class ConditionFCN(nn.Module):
             nn.SiLU(),
             zero_module(conv_nd(dims, 128, out_channels, 3, stride=1, padding=1))
         )  # 8x down_sample
+
+        if weight_dict is not None:
+            weight = OrderedDict()
+            for k, v in weight_dict.items():
+                if weight_key in k:
+                    weight[k[len(weight_key):]] = v
+            self.load_state_dict(weight)
 
     def forward(self, cond: torch.Tensor):
         cond = self.cnn_layers(cond)
@@ -247,6 +256,10 @@ class FrozenCLIPTextImageEmbedder(nn.Module):
         self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(version)
         self.image_layer = image_layer
 
+        if version != "openai/clip-vit-large-patch14":
+            self.image_mapping = torch.nn.Linear(512, 768, bias=False)
+            torch.nn.init.eye_(self.image_mapping.weight)
+
         self.device = device
         self.max_length = max_length
         if freeze:
@@ -268,7 +281,9 @@ class FrozenCLIPTextImageEmbedder(nn.Module):
         if self.use_text:
             self.transformer = self.transformer.eval()
         self.image_encoder = self.image_encoder.eval()
-        for param in self.parameters():
+        for name, param in self.named_parameters():
+            if "image_mapping" in name:
+                continue
             param.requires_grad = False
         print("[FrozenCLIPTextImageEmbedder] params all frozen.")
 
@@ -296,6 +311,8 @@ class FrozenCLIPTextImageEmbedder(nn.Module):
         ''' 2. image '''
         if self.image_layer == "projection":
             z_image = self.image_encoder(image).image_embeds  # (B,768)
+            if z_image.shape[1] < 768:  # when version != "openai/clip-vit-large-patch14"
+                z_image = self.image_mapping(z_image)
             z_image = z_image[:, None, :]  # (B,1,768)
         else:
             z_image = self.image_encoder(image).last_hidden_state  # (B,257,1024)
@@ -311,6 +328,7 @@ class FrozenCLIPTextImageEmbedder(nn.Module):
 class AnimateAnyoneInput(BaseOutput):
 
     person: torch.Tensor
+    cloth: torch.Tensor
     warped_person: torch.Tensor
     dwpose: torch.Tensor
     person_fn: List[str]
@@ -356,17 +374,24 @@ class AnimateAnyonePL(pl.LightningModule):
                  noise_offset: float = 0.,  # recommended 0.1
                  input_perturbation: float = 0.,  # recommended 0.1
                  snr_gamma: float = None,  # recommended 5.0
+                 resume_ckpt: str = None,
                  ):
         super().__init__()
 
         ''' animate_anyone models '''
+        resume_weight = None
+        if resume_ckpt is not None:
+            resume_weight = torch.load(resume_ckpt, map_location="cpu")["state_dict"]
+            seed = int(time.time())
+        self.unet_ref = aniany_unet(in_channels=4 + 4, weight_dict=resume_weight, weight_key="unet_ref.")  # warped, cloth
+        self.unet_main = aniany_unet(in_channels=4, weight_dict=resume_weight, weight_key="unet_main.")
+        self.cond_fcn = ConditionFCN(cond_channels=3, out_channels=4, weight_dict=resume_weight, weight_key="cond_fcn.")
+        if resume_ckpt is not None and resume_weight is not None:
+            print(f"[AnimateAnyonePL] unet_ref, unet_main, cond_fcn loaded from: {resume_ckpt}")
+
         sd_inpaint_dir = "pretrained/stable-diffusion-inpainting"
-        out_channels = 4  # fixed as 4
-        self.unet_ref = aniany_unet(in_channels=4, out_channels=out_channels)  # 4: vae latent channels
-        self.unet_main = aniany_unet(in_channels=4, out_channels=out_channels)
-        self.cond_fcn = ConditionFCN(cond_channels=3, out_channels=4)
         self.clip_encoder = FrozenCLIPTextImageEmbedder(
-            # version="openai/clip-vit-base-patch32",
+            version="openai/clip-vit-base-patch32",
             use_text=False, image_layer="projection",
             freeze=False,
         )
@@ -374,7 +399,6 @@ class AnimateAnyonePL(pl.LightningModule):
         self.noise_scheduler = DDIMScheduler.from_pretrained(sd_inpaint_dir + "/scheduler")
         self.val_scheduler = DDIMScheduler.from_pretrained(sd_inpaint_dir + "/scheduler")
 
-        # self.unet_ref.requires_grad_(False)
         # self.clip_encoder.requires_grad_(False)
         # self.vae.requires_grad_(False)
         if is_xformers_available():
@@ -423,6 +447,7 @@ class AnimateAnyonePL(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         with torch.no_grad():
             person = batch["person"]
+            cloth = batch["cloth"]
             dwpose = batch["dwpose"]
             warped_person = batch["warped_person"]
             person_fn = batch["person_fn"]
@@ -435,7 +460,7 @@ class AnimateAnyonePL(pl.LightningModule):
         ''' forward '''
         # predict the noise residual
         latent_outputs = self.forward(
-            person, warped_person, dwpose,
+            person, cloth, warped_person, dwpose,
         )
         loss = latent_outputs.loss
 
@@ -445,8 +470,22 @@ class AnimateAnyonePL(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
+        # do not really use the batch input
         with torch.no_grad():
+            val_set_len = self.train_set.__len__()
+            val_idx = int(torch.randint(0, val_set_len, (1,), generator=self.generator, device=self.generator.device))
+            device = batch["person"].device
+            dtype = batch["person"].dtype
+
+            batch: dict = self.train_set[val_idx]
+            for k, v in batch.items():
+                if isinstance(v, torch.Tensor):
+                    batch[k] = v.unsqueeze(0).to(device=device, dtype=dtype)  # add batch dim
+                else:
+                    batch[k] = [v]  # as list
+
             person = batch["person"]
+            cloth = batch["cloth"]
             dwpose = batch["dwpose"]
             warped_person = batch["warped_person"]
             person_fn = batch["person_fn"]
@@ -459,7 +498,7 @@ class AnimateAnyonePL(pl.LightningModule):
         ''' forward '''
         # predict the noise residual
         latent_outputs = self.forward(
-            person, warped_person, dwpose,
+            person, cloth, warped_person, dwpose,
             do_classifier_free_guidance=do_classifier_free_guidance,
             guidance_scale=guidance_scale,
             num_inference_steps=num_inference_steps,
@@ -482,6 +521,7 @@ class AnimateAnyonePL(pl.LightningModule):
             warped_person=batch["warped_person"],
             dwpose=batch["dwpose"],
             person_fn=batch["person_fn"],
+            cloth=batch["cloth"]
         )
         self.log("val_loss", loss)
         self._log_images("val", batch_input, outputs)
@@ -643,6 +683,7 @@ class AnimateAnyonePL(pl.LightningModule):
     def forward(
             self,
             person: torch.Tensor,
+            cloth: torch.Tensor,
             warped_person: torch.Tensor,
             dwpose: torch.Tensor,
             do_classifier_free_guidance: bool = False,  # for val
@@ -656,14 +697,14 @@ class AnimateAnyonePL(pl.LightningModule):
 
         ''' get input latents '''
         zero_mask = torch.zeros((batch_size, 1, in_height, in_width)).to(device)
-        vae_input_images = [person, warped_person]
+        vae_input_images = [person, warped_person, cloth]
         input_latents = self._prepare_shared_latents_before_forward(
             vae_input_images,
-            [zero_mask, zero_mask],
+            [zero_mask, zero_mask, zero_mask],
             dwpose,
             num_images_per_cond
         )
-        person_gt_latent, person_warped_latent = input_latents.image_latents.chunk(2)
+        person_gt_latent, person_warped_latent, cloth_latent = input_latents.image_latents.chunk(3)
         image_embedding = input_latents.image_embedding
 
         # 3.b get features of condition
@@ -695,14 +736,18 @@ class AnimateAnyonePL(pl.LightningModule):
         if do_classifier_free_guidance:
             person_gt_latent = torch.cat([person_gt_latent] * 2)
             person_warped_latent = torch.cat([person_warped_latent] * 2)
+            cloth_latent = torch.cat([cloth_latent] * 2)
             cond_fcn_features = torch.cat([cond_fcn_features] * 2)
+
+        # unet_ref_input = person_warped_latent
+        unet_ref_input = torch.cat([person_warped_latent, cloth_latent], dim=1)  # (B,C*2,H,W)
 
         ''' unet forward '''
         if self.training:
             with torch.cuda.amp.autocast(cache_enabled=False):
                 # 7.a reference net
                 ref_output = self.unet_ref(
-                    person_warped_latent, timestep,
+                    unet_ref_input, timestep,
                     encoder_hidden_states=image_embedding,
                     ret_kv=True,
                 )
@@ -736,7 +781,7 @@ class AnimateAnyonePL(pl.LightningModule):
                 # predict the noise residual
                 # 7.a reference net
                 ref_output = self.unet_ref(
-                    person_warped_latent, t_double,
+                    unet_ref_input, t_double,
                     encoder_hidden_states=image_embedding,
                     ret_kv=True,
                 )
@@ -1001,6 +1046,7 @@ class AnimateAnyonePL(pl.LightningModule):
         save_prefix = f"{self.global_step:08d}"
 
         person = inputs.person
+        cloth = inputs.cloth
         warped_person = inputs.warped_person
         dwpose = inputs.dwpose
         person_fn = inputs.person_fn
@@ -1011,6 +1057,7 @@ class AnimateAnyonePL(pl.LightningModule):
         batch_size = out_person.shape[0]
 
         persons_pils = tensor_to_rgb(person[:bs], out_batch_idx=None, out_as_pil=True)
+        cloth_pils = tensor_to_rgb(cloth[:bs], out_batch_idx=None, out_as_pil=True)
         warped_person_pils = tensor_to_rgb(warped_person[:bs], out_batch_idx=None, out_as_pil=True)
         dwpose_pils = tensor_to_rgb(dwpose[:bs], out_batch_idx=None, out_as_pil=True, is_zero_center=False)
         out_person_pils = [Image.fromarray(rgb) for rgb in out_person[:bs]]
@@ -1024,6 +1071,7 @@ class AnimateAnyonePL(pl.LightningModule):
             person_fn_wo_ext = os.path.splitext(person_fn[b_idx])[0]
             persons_pils[b_idx].save(os.path.join(save_dir, save_prefix + f"_in_01a_person_{person_fn_wo_ext}.png"))
             warped_person_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_in_02a_warped.png"))
+            cloth_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_in_02b_cloth.png"))
             dwpose_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_in_03a_dwpose.png"))
             out_person_pils[b_idx].save(os.path.join(save_dir, save_prefix + "_out_01a_person.png"))
 
