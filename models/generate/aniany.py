@@ -383,8 +383,8 @@ class AnimateAnyonePL(pl.LightningModule):
         if resume_ckpt is not None:
             resume_weight = torch.load(resume_ckpt, map_location="cpu")["state_dict"]
             seed = int(time.time())
-        self.unet_ref = aniany_unet(in_channels=4 + 4, weight_dict=resume_weight, weight_key="unet_ref.")  # warped, cloth
-        self.unet_main = aniany_unet(in_channels=4, weight_dict=resume_weight, weight_key="unet_main.")
+        self.unet_ref = aniany_unet(in_channels=4, weight_dict=resume_weight, weight_key="unet_ref.")  # cloth
+        self.unet_main = aniany_unet(in_channels=4 + 4, weight_dict=resume_weight, weight_key="unet_main.")  # noisy + pose, warped
         self.cond_fcn = ConditionFCN(cond_channels=3, out_channels=4, weight_dict=resume_weight, weight_key="cond_fcn.")
         if resume_ckpt is not None and resume_weight is not None:
             print(f"[AnimateAnyonePL] unet_ref, unet_main, cond_fcn loaded from: {resume_ckpt}")
@@ -740,7 +740,9 @@ class AnimateAnyonePL(pl.LightningModule):
             cond_fcn_features = torch.cat([cond_fcn_features] * 2)
 
         # unet_ref_input = person_warped_latent
-        unet_ref_input = torch.cat([person_warped_latent, cloth_latent], dim=1)  # (B,C*2,H,W)
+        # unet_ref_input = torch.cat([person_warped_latent, cloth_latent], dim=1)  # (B,C*2,H,W)
+
+        unet_ref_input = cloth_latent
 
         ''' unet forward '''
         if self.training:
@@ -756,9 +758,9 @@ class AnimateAnyonePL(pl.LightningModule):
                 # print("ref_net:", len(sa_k_ref), sa_k_ref[0][0].dtype)
 
                 # 7.b main net
-                noisy += cond_fcn_features
+                unet_main_input = torch.cat([noisy + cond_fcn_features, person_warped_latent], dim=1)
                 model_pred = self.unet_main(
-                    noisy, timestep,
+                    unet_main_input, timestep,
                     encoder_hidden_states=image_embedding,
                     in_k_refs=sa_k_ref,
                     in_v_refs=sa_v_ref,
@@ -790,9 +792,9 @@ class AnimateAnyonePL(pl.LightningModule):
                 # print("ref_net:", len(sa_k_ref), sa_k_ref[0][0].dtype)
 
                 # 7.b main net
-                noisy_double += cond_fcn_features
+                unet_main_input = torch.cat([noisy_double + cond_fcn_features, person_warped_latent], dim=1)
                 model_pred = self.unet_main(
-                    noisy_double, t_double,
+                    unet_main_input, t_double,
                     encoder_hidden_states=image_embedding,
                     in_k_refs=sa_k_ref,
                     in_v_refs=sa_v_ref,
