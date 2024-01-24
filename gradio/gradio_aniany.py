@@ -23,38 +23,39 @@ class ModelHolder(object):
 
     def _load_models(self):
         if self.model_infer is None:
-            test_weight_path = "/cfs/yuange/code/XTryOn/lightning_logs/aniany/2023_12_08T23_25_22/checkpoints/epoch=29-step=43620.ckpt"
+            test_ckpt_path = "/cfs/yuange/code/XTryOn/lightning_logs/aniany/2024_01_03T17_46_26/checkpoints/epoch=99-step=336100.ckpt"
             self.model_infer = AniAnyBatchInfer(
                 unet_in_channels=4,
-                unet_weight_path=test_weight_path,
-                infer_height=512,
-                infer_width=384,
+                unet_weight_path=None,
+                infer_height=768,
+                infer_width=576,
             )
+            self.ckpt_path = test_ckpt_path
 
     # def _reload_mgd(self, ckpt_path: str):
     #     self.mgd_infer = AniAnyBatchInfer()
 
-    def run(self, img_cloth, img_warped, text_cloth,
+    def run(self, img_person, img_cloth, img_warped, text_cloth,
             use_reload: bool = False, ckpt_path: str = None):
         # if use_reload:
         #     self._reload_mgd(ckpt_path=ckpt_path)
         self._load_models()
 
         gen_pils = self.model_infer.forward_rgb_as_pil(
-            img_cloth, text_cloth, img_warped,
+            img_person, img_cloth, text_cloth, img_warped,
             num_samples=2,
             num_inference_steps=20,
-            ckpt_path=ckpt_path,
+            ckpt_path=self.ckpt_path,
         )
 
         gen_vis = [np.array(pil).astype(np.uint8) for pil in gen_pils]
         return gen_vis
 
 
-def run(img1: np.ndarray, img2: np.ndarray, text1: str,
-            use_reload: bool, ckpt_path: str,
-            ):
-    ret = model_holder.run(img1, img2, text1, use_reload, ckpt_path)
+def run(img1: np.ndarray, img2: np.ndarray, img3: np.ndarray,
+        text1: str, use_reload: bool, ckpt_path: str,
+        ):
+    ret = model_holder.run(img1, img2, img3, text1, use_reload, ckpt_path)
     return ret
 
 
@@ -66,8 +67,9 @@ if __name__ == "__main__":
         with gr.Tab("AniAny"):
             with gr.Row():
                 with gr.Column(scale=3):
-                    image1_input = gr.Image(label="cloth")
-                    image2_input = gr.Image(label="warped")
+                    image1_input = gr.Image(label="person")
+                    image2_input = gr.Image(label="cloth")
+                    image3_input = gr.Image(label="warped")
                     text1_input = gr.Text(label="prompt")
                     with gr.Column():
                         model_ckpt = gr.Textbox(label="Ckpt", value="./pretrained/m2f/cloth_model.pt")
@@ -78,7 +80,7 @@ if __name__ == "__main__":
 
         image_button.click(
             run,
-            inputs=[image1_input, image2_input, text1_input, model_reload, model_ckpt, ],
+            inputs=[image1_input, image2_input, image3_input, text1_input, model_reload, model_ckpt, ],
             outputs=[image_output],
         )
 

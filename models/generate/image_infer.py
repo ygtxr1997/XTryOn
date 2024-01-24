@@ -495,6 +495,7 @@ class AniAnyBatchInfer(object):
     @torch.inference_mode()
     def forward_rgb_as_pil(self,
                            model_rgb: np.ndarray,
+                           cloth_rgb: np.ndarray,
                            prompt: str,  # not used
                            warped_rgb: np.ndarray = None,
                            num_samples: int = 4,
@@ -549,6 +550,8 @@ class AniAnyBatchInfer(object):
         ''' vis inputs '''
         model_pil = Image.fromarray(model_rgb.astype(np.uint8))
         model_down_rgb = np.array(model_pil.resize((width, height), resample=Image.BILINEAR))
+        cloth_pil = Image.fromarray(cloth_rgb.astype(np.uint8))
+        cloth_down_rgb = np.array(cloth_pil.resize((width, height), resample=Image.BILINEAR))
         # Image.fromarray(model_down_rgb).save("tmp_01_model.png")
         # edge_pil.save("tmp_02_edge.png")
         inpaint_mask_arr = (inpaint_mask[0]).cpu().numpy().astype(np.uint8)  # (H,W), in [0,1]
@@ -570,6 +573,7 @@ class AniAnyBatchInfer(object):
         """
 
         model_input = self.trans(model_down_rgb).unsqueeze(0).cuda()
+        cloth_input = self.trans(cloth_down_rgb).unsqueeze(0).cuda()
         mask_input = inpaint_mask.unsqueeze(0).cuda()
         sketch_input = edge_tensor.unsqueeze(0).cuda()
         pose_input = self.trans(pose_rgb).unsqueeze(0).cuda() * 0.5 + 0.5  # in [0,1]
@@ -587,6 +591,7 @@ class AniAnyBatchInfer(object):
         ''' run '''
         latent_output = self.aniany_pl.forward(
             person=model_input,
+            cloth=cloth_input,
             warped_person=warped_input,
             dwpose=pose_input,
             num_inference_steps=num_inference_steps,
@@ -803,15 +808,19 @@ class AniAnyBatchInfer(object):
     def _load_aniany_pl(self, ckpt_path: str = None):
         if self.ckpt_path == ckpt_path:  # no need to reload
             return self.aniany_pl
+        if ".ckpt" in ckpt_path:
+            self.ckpt_path = ckpt_path
+        resume_ckpt_path = self.ckpt_path
         aniany_pl = AnimateAnyonePL(
             train_set=None,
-            seed=42
+            seed=42,
+            resume_ckpt=resume_ckpt_path,
         ).cuda()
-        if ckpt_path is not None:
-            weight = torch.load(ckpt_path, map_location="cpu")["state_dict"]
-            aniany_pl.load_state_dict(weight)
-            self.ckpt_path = ckpt_path
-            print(f"[AniAnyBatchInfer] model loaded from: {ckpt_path}")
+        # if ckpt_path is not None and ".ckpt" in ckpt_path:
+        #     weight = torch.load(ckpt_path, map_location="cpu")["state_dict"]
+        #     aniany_pl.load_state_dict(weight)
+        #     self.ckpt_path = ckpt_path
+        #     print(f"[AniAnyBatchInfer] model loaded from: {ckpt_path}")
         aniany_pl.eval()
         # aniany_pl.enable_attention_slicing()
         return aniany_pl
