@@ -21,9 +21,10 @@ class ModelHolder(object):
 
         self.model_infer = None
 
-    def _load_models(self):
-        if self.model_infer is None:
-            test_ckpt_path = "/cfs/yuange/code/XTryOn/lightning_logs/aniany/2024_01_03T17_46_26/checkpoints/epoch=99-step=336100.ckpt"
+    def _load_models(self,
+                     test_ckpt_path: str,
+                     ):
+        if self.model_infer is None and os.path.exists(test_ckpt_path):
             self.model_infer = AniAnyBatchInfer(
                 unet_in_channels=4,
                 unet_weight_path=None,
@@ -32,14 +33,11 @@ class ModelHolder(object):
             )
             self.ckpt_path = test_ckpt_path
 
-    # def _reload_mgd(self, ckpt_path: str):
-    #     self.mgd_infer = AniAnyBatchInfer()
-
     def run(self, img_person, img_cloth, img_warped, text_cloth,
             use_reload: bool = False, ckpt_path: str = None):
-        # if use_reload:
-        #     self._reload_mgd(ckpt_path=ckpt_path)
-        self._load_models()
+        if not use_reload:
+            ckpt_path = "/cfs/yuange/code/XTryOn/lightning_logs/aniany/2024_01_03T17_46_26/checkpoints/epoch=99-step=336100.ckpt"
+        self._load_models(ckpt_path)
 
         gen_pils = self.model_infer.forward_rgb_as_pil(
             img_person, img_cloth, text_cloth, img_warped,
@@ -72,7 +70,7 @@ if __name__ == "__main__":
                     image3_input = gr.Image(label="warped")
                     text1_input = gr.Text(label="prompt")
                     with gr.Column():
-                        model_ckpt = gr.Textbox(label="Ckpt", value="./pretrained/m2f/cloth_model.pt")
+                        model_ckpt = gr.Textbox(label="Ckpt", value="")
                         model_reload = gr.Checkbox(label='Reload Ckpt', value=False)
                 with gr.Column(scale=2):
                     image_output = gr.Gallery(label='output', show_label=False, elem_id="gallery").style(grid=2, height='auto')
